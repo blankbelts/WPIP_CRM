@@ -1,11 +1,14 @@
 // Warstwa bazy danych WPIP CRM - node:sqlite (wbudowane w Node 24)
 import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
+import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Na Railway ustaw DATA_DIR na sciezke wolumenu (np. /data), inaczej baza znika przy deployu
 const DATA_DIR = process.env.DATA_DIR || __dirname;
+fs.mkdirSync(DATA_DIR, { recursive: true });
+console.log('Baza danych:', path.join(DATA_DIR, 'wpip-crm.sqlite'));
 export const db = new DatabaseSync(path.join(DATA_DIR, 'wpip-crm.sqlite'));
 
 db.exec(`PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;`);
