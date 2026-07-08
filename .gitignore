@@ -1,0 +1,5 @@
+node_modules/
+wpip-crm.sqlite
+wpip-crm.sqlite-wal
+wpip-crm.sqlite-shm
+*.log

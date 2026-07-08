@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WPIP CRM - New Business</title>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+  <div class="layout">
+    <nav class="sidebar">
+      <div class="logo">WPIP <span>CRM</span></div>
+      <div class="nav-sekcja">New Business</div>
+      <a href="#/" data-nav="/">Pulpit</a>
+      <a href="#/import" data-nav="/import">Import leadów</a>
+      <a href="#/leady" data-nav="/leady">Leady / Prospecting</a>
+      <a href="#/scoring" data-nav="/scoring">Scoring leadów</a>
+      <a href="#/komitet" data-nav="/komitet">Komitet Ofertowy</a>
+      <a href="#/pipeline" data-nav="/pipeline">Pipeline</a>
+      <div class="nav-sekcja">Kartoteki</div>
+      <a href="#/klienci" data-nav="/klienci">Klienci i osoby</a>
+      <a href="#/dzialania" data-nav="/dzialania">Działania</a>
+      <div class="nav-sekcja">Konfiguracja</div>
+      <a href="#/ustawienia" data-nav="/ustawienia">Ustawienia</a>
+      <div class="sidebar-stopka">
+        <div id="uzytkownik-info" class="uzytkownik-info"></div>
+        Faza 1 · dwie osie prawdopodobieństwa:<br>kwalifikacja ≠ wygrana
+      </div>
+    </nav>
+    <main id="widok" class="content"></main>
+  </div>
+  <div id="login-root"></div>
+  <div id="modal-root"></div>
+  <div id="toast-root"></div>
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>

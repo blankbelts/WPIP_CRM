@@ -1,0 +1,184 @@
+/* WPIP CRM - style aplikacji */
+:root {
+  --granat: #16283f;
+  --granat-2: #1f3a5c;
+  --akcent: #e8622c;
+  --akcent-jasny: #ff7a42;
+  --tlo: #f4f6f9;
+  --karta: #ffffff;
+  --tekst: #1d2733;
+  --tekst-2: #64748b;
+  --linia: #e2e8f0;
+  --zielony: #15803d;
+  --zielony-tlo: #dcfce7;
+  --czerwony: #b91c1c;
+  --czerwony-tlo: #fee2e2;
+  --zolty: #a16207;
+  --zolty-tlo: #fef9c3;
+  --nieb: #1d4ed8;
+  --nieb-tlo: #dbeafe;
+  --szary-tlo: #f1f5f9;
+  --cien: 0 1px 3px rgba(16, 24, 40, .08), 0 1px 2px rgba(16, 24, 40, .04);
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  background: var(--tlo);
+  color: var(--tekst);
+  font-size: 14px;
+}
+.layout { display: flex; min-height: 100vh; }
+
+/* --- Sidebar --- */
+.sidebar {
+  width: 220px; flex-shrink: 0;
+  background: var(--granat); color: #cbd5e1;
+  padding: 20px 12px; position: sticky; top: 0; height: 100vh;
+  display: flex; flex-direction: column;
+}
+.logo { font-size: 20px; font-weight: 700; color: #fff; padding: 0 10px 18px; letter-spacing: .5px; }
+.logo span { color: var(--akcent-jasny); }
+.nav-sekcja { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #7f93ad; padding: 14px 10px 6px; }
+.sidebar a {
+  display: block; color: #cbd5e1; text-decoration: none;
+  padding: 8px 10px; border-radius: 8px; margin-bottom: 2px;
+}
+.sidebar a:hover { background: var(--granat-2); color: #fff; }
+.sidebar a.aktywny { background: var(--akcent); color: #fff; font-weight: 600; }
+.sidebar-stopka { margin-top: auto; font-size: 11px; color: #7f93ad; padding: 10px; line-height: 1.5; }
+
+/* --- Content --- */
+.content { flex: 1; padding: 24px 28px; max-width: 1400px; }
+h1 { font-size: 22px; margin: 0 0 4px; }
+h2 { font-size: 16px; margin: 22px 0 10px; }
+.podtytul { color: var(--tekst-2); margin: 0 0 20px; }
+.naglowek-akcje { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+
+/* --- Karty / kafle --- */
+.kafle { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px; margin-bottom: 20px; }
+.kafel { background: var(--karta); border-radius: 12px; padding: 16px; box-shadow: var(--cien); }
+.kafel .etykieta { font-size: 12px; color: var(--tekst-2); margin-bottom: 6px; }
+.kafel .wartosc { font-size: 24px; font-weight: 700; }
+.kafel .drobne { font-size: 12px; color: var(--tekst-2); margin-top: 4px; }
+.karta-box { background: var(--karta); border-radius: 12px; padding: 18px; box-shadow: var(--cien); margin-bottom: 18px; }
+
+/* --- Tabele --- */
+table { width: 100%; border-collapse: collapse; background: var(--karta); border-radius: 12px; overflow: hidden; box-shadow: var(--cien); }
+th { text-align: left; font-size: 12px; text-transform: uppercase; letter-spacing: .4px; color: var(--tekst-2); padding: 10px 12px; border-bottom: 2px solid var(--linia); background: #fafbfc; }
+td { padding: 10px 12px; border-bottom: 1px solid var(--linia); vertical-align: middle; }
+tr:last-child td { border-bottom: none; }
+tr.klikalne { cursor: pointer; }
+tr.klikalne:hover td { background: #f8fafc; }
+.wysrodkuj { text-align: center; }
+.liczba { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* --- Badge --- */
+.badge { display: inline-block; padding: 2px 9px; border-radius: 20px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.badge-a { background: var(--zielony-tlo); color: var(--zielony); }
+.badge-b { background: var(--nieb-tlo); color: var(--nieb); }
+.badge-c { background: var(--zolty-tlo); color: var(--zolty); }
+.badge-d { background: var(--szary-tlo); color: var(--tekst-2); }
+.badge-x { background: var(--czerwony-tlo); color: var(--czerwony); }
+.badge-szary { background: var(--szary-tlo); color: var(--tekst-2); }
+.badge-zielony { background: var(--zielony-tlo); color: var(--zielony); }
+.badge-czerwony { background: var(--czerwony-tlo); color: var(--czerwony); }
+.badge-zolty { background: var(--zolty-tlo); color: var(--zolty); }
+.badge-nieb { background: var(--nieb-tlo); color: var(--nieb); }
+.badge-akcent { background: #fdeade; color: #c2410c; }
+
+/* --- Przyciski --- */
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--linia); background: var(--karta); color: var(--tekst);
+  padding: 8px 14px; border-radius: 8px; font-size: 13px; font-weight: 600;
+  cursor: pointer; text-decoration: none;
+}
+.btn:hover { background: var(--szary-tlo); }
+.btn-glowny { background: var(--akcent); border-color: var(--akcent); color: #fff; }
+.btn-glowny:hover { background: #d4551f; }
+.btn-maly { padding: 4px 10px; font-size: 12px; }
+.btn-zielony { background: var(--zielony); border-color: var(--zielony); color: #fff; }
+.btn-zielony:hover { background: #116a33; }
+.btn-czerwony { background: var(--karta); border-color: #fca5a5; color: var(--czerwony); }
+.btn-czerwony:hover { background: var(--czerwony-tlo); }
+
+/* --- Formularze --- */
+.form-siatka { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.pole { display: flex; flex-direction: column; gap: 4px; }
+.pole label { font-size: 12px; font-weight: 600; color: var(--tekst-2); }
+.pole .pomoc { font-size: 11px; color: var(--tekst-2); font-weight: 400; }
+input, select, textarea {
+  font: inherit; padding: 8px 10px; border: 1px solid var(--linia); border-radius: 8px;
+  background: #fff; color: var(--tekst); width: 100%;
+}
+input:focus, select:focus, textarea:focus { outline: 2px solid #f9b28f; border-color: var(--akcent); }
+textarea { resize: vertical; min-height: 60px; }
+.pole-szerokie { grid-column: 1 / -1; }
+
+/* --- Modal --- */
+.modal-tlo { position: fixed; inset: 0; background: rgba(15, 23, 42, .55); display: flex; align-items: flex-start; justify-content: center; padding: 5vh 16px; z-index: 100; overflow-y: auto; }
+.modal { background: var(--karta); border-radius: 14px; padding: 22px; width: 100%; max-width: 720px; box-shadow: 0 20px 50px rgba(0,0,0,.3); }
+.modal h2 { margin-top: 0; }
+.modal-stopka { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+
+/* --- Toast --- */
+#toast-root { position: fixed; bottom: 20px; right: 20px; z-index: 200; display: flex; flex-direction: column; gap: 8px; }
+.toast { background: var(--granat); color: #fff; padding: 12px 18px; border-radius: 10px; box-shadow: var(--cien); animation: toastIn .2s ease; max-width: 360px; }
+.toast.blad { background: var(--czerwony); }
+@keyframes toastIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+/* --- Kanban pipeline --- */
+.kanban { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(230px, 1fr); gap: 12px; overflow-x: auto; padding-bottom: 8px; }
+.kanban-kolumna { background: #eaeef4; border-radius: 12px; padding: 10px; min-height: 200px; }
+.kanban-naglowek { font-weight: 700; font-size: 13px; padding: 4px 6px 10px; display: flex; justify-content: space-between; color: var(--granat); }
+.kanban-karta { background: var(--karta); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; box-shadow: var(--cien); cursor: pointer; border-left: 3px solid var(--akcent); }
+.kanban-karta:hover { box-shadow: 0 4px 10px rgba(16,24,40,.12); }
+.kanban-karta .kk-id { font-weight: 700; font-size: 13px; }
+.kanban-karta .kk-info { font-size: 12px; color: var(--tekst-2); margin-top: 3px; display: flex; justify-content: space-between; }
+
+/* --- Kamienie prospectingu (stepper) --- */
+.stepper { display: flex; gap: 4px; flex-wrap: wrap; margin: 10px 0; }
+.step { padding: 5px 12px; border-radius: 20px; font-size: 12px; background: var(--szary-tlo); color: var(--tekst-2); cursor: pointer; border: 1px solid transparent; }
+.step.zaliczony { background: var(--nieb-tlo); color: var(--nieb); }
+.step.aktualny { background: var(--granat); color: #fff; font-weight: 700; }
+.step:hover { border-color: var(--granat); }
+
+/* --- Pasek prawdopodobienstwa --- */
+.pasek { background: var(--szary-tlo); height: 8px; border-radius: 6px; overflow: hidden; min-width: 60px; }
+.pasek > div { height: 100%; background: linear-gradient(90deg, var(--akcent), var(--akcent-jasny)); }
+
+/* --- Filtry --- */
+.filtry { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; align-items: center; }
+.filtry select, .filtry input { width: auto; }
+
+/* --- Wykres kwartalny (paski) --- */
+.wykres-kw { display: flex; gap: 14px; align-items: flex-end; height: 160px; padding: 10px 4px 0; }
+.wykres-kw .slupek-grupa { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px; height: 100%; justify-content: flex-end; }
+.wykres-kw .slupki { display: flex; gap: 3px; align-items: flex-end; height: 100%; width: 100%; justify-content: center; }
+.wykres-kw .slupek { width: 26px; border-radius: 4px 4px 0 0; min-height: 2px; }
+.wykres-kw .slupek.plan { background: #c7d4e4; }
+.wykres-kw .slupek.wazony { background: var(--akcent); }
+.wykres-kw .podpis { font-size: 11px; color: var(--tekst-2); white-space: nowrap; }
+.legenda { display: flex; gap: 16px; font-size: 12px; color: var(--tekst-2); margin-top: 8px; }
+.legenda .kropka { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+
+/* --- Szczegoly (dl) --- */
+.szczegoly { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px 20px; }
+.szczegoly .poz { border-bottom: 1px dashed var(--linia); padding-bottom: 6px; }
+.szczegoly .poz .et { font-size: 11px; text-transform: uppercase; color: var(--tekst-2); letter-spacing: .4px; }
+.szczegoly .poz .wa { font-weight: 600; margin-top: 2px; }
+
+/* --- Logowanie --- */
+.login-ekran { position: fixed; inset: 0; background: var(--granat); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.login-karta { background: var(--karta); border-radius: 16px; padding: 30px; width: 100%; max-width: 380px; box-shadow: 0 20px 60px rgba(0,0,0,.4); }
+.login-karta .logo { color: var(--granat); font-size: 22px; font-weight: 700; }
+.login-karta .logo span { color: var(--akcent); }
+.uzytkownik-info { display: flex; justify-content: space-between; align-items: center; padding-bottom: 10px; color: #cbd5e1; }
+.uzytkownik-info .wyloguj-link { color: var(--akcent-jasny); text-decoration: none; padding: 0; }
+.uzytkownik-info .wyloguj-link:hover { text-decoration: underline; }
+
+.puste { text-align: center; color: var(--tekst-2); padding: 34px 10px; }
+.link { color: var(--nieb); cursor: pointer; text-decoration: underline; }
+.ostrzezenie { background: var(--zolty-tlo); color: var(--zolty); border-radius: 8px; padding: 8px 12px; font-size: 12px; margin: 8px 0; }
+.info-box { background: var(--nieb-tlo); color: var(--nieb); border-radius: 8px; padding: 8px 12px; font-size: 12px; margin: 8px 0; }
