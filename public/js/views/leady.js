@@ -11,6 +11,28 @@ export function badgeResearch(s) { return s ? badge('R: ' + s, KOLORY_RESEARCHU[
 const KOLORY_WERDYKTU = { 'interesujący': 'zielony', 'do decyzji': 'zolty', 'odpuszczony': 'czerwony' };
 function badgeWerdykt(w) { return w ? badge(w, KOLORY_WERDYKTU[w] || 'szary') : ''; }
 
+// Karta kanbanu dopasowana do etapu sciezki - dolna linia pokazuje to, co wazne na danym kamieniu
+function kartaLeada(l) {
+  let dol;
+  if (l.kamien === 'Lead surowy') dol = el('span', { style: 'color:var(--tekst-2)' }, l.kwalif_wynik ? badgeWerdykt(l.kwalif_wynik) : '→ do kwalifikacji');
+  else if (l.kamien === 'Kwalifikacja wstępna') dol = el('span', {}, badgeWerdykt(l.kwalif_wynik), ' ', l.proces_researchu ? el('span', { style: 'color:var(--tekst-2); font-size:11px' }, l.proces_researchu.slice(0, 20)) : '');
+  else if (l.kamien === 'Research') dol = l.fast_track ? badge('fast-track', 'zielony') : badgeResearch(l.status_researchu);
+  else if (l.kamien === 'Scoring') dol = el('span', {}, badgeResearch(l.status_researchu), ' ', l.scoring_potwierdzony ? badge('✓ scoring', 'zielony') : el('span', { style: 'color:var(--tekst-2); font-size:11px' }, 'do potwierdzenia'));
+  else if (l.kamien === 'Zakwalifikowany') dol = el('span', {}, badge('→ Komitet', 'akcent'));
+  else dol = badgeResearch(l.status_researchu);
+
+  return el('div', {
+    class: 'kanban-karta',
+    style: l.dyskwalifikacja_x ? 'border-left-color:var(--czerwony)' : (l.fast_track ? 'border-left-color:var(--zielony)' : ''),
+    onclick: () => location.hash = '#/leady/' + l.id
+  },
+    el('div', { class: 'kk-id' }, l.nazwa.slice(0, 60)),
+    el('div', { class: 'kk-info' },
+      el('span', {}, badgePriorytet(l.priorytet), ' ', String(l.score_total), ' pkt'),
+      el('span', {}, l.dzialania_otwarte ? `${l.dzialania_otwarte} dz.` : '')),
+    el('div', { class: 'kk-info', style: 'margin-top:4px' }, el('span', {}, dol)));
+}
+
 export async function widokLeady(kontener, query = '') {
   const params = new URLSearchParams(query);
   const [leady, grupy, sl] = await Promise.all([GET('/leady'), GET('/grupy'), slowniki()]);
@@ -35,17 +57,7 @@ export async function widokLeady(kontener, query = '') {
           const wKolumnie = dane.filter(l => l.kamien === kamien);
           return el('div', { class: 'kanban-kolumna' },
             el('div', { class: 'kanban-naglowek' }, el('span', {}, kamien), el('span', {}, String(wKolumnie.length))),
-            ...wKolumnie.map(l => el('div', {
-              class: 'kanban-karta', style: l.dyskwalifikacja_x ? 'border-left-color:var(--czerwony)' : (l.fast_track ? 'border-left-color:var(--zielony)' : ''),
-              onclick: () => location.hash = '#/leady/' + l.id
-            },
-              el('div', { class: 'kk-id' }, l.nazwa.slice(0, 60)),
-              el('div', { class: 'kk-info' },
-                el('span', {}, badgePriorytet(l.priorytet), ' ', String(l.score_total), ' pkt'),
-                el('span', {}, l.fast_track ? badge('fast-track', 'zielony') : badgeResearch(l.status_researchu))),
-              el('div', { class: 'kk-info' },
-                el('span', {}, l.proces_researchu ? l.proces_researchu.slice(0, 22) : (l.wojewodztwo || '')),
-                el('span', {}, l.dzialania_otwarte ? `${l.dzialania_otwarte} dz.` : '')))));
+            ...wKolumnie.map(kartaLeada));
         })));
     } else {
       box.append(tabela([
@@ -72,7 +84,9 @@ export async function widokLeady(kontener, query = '') {
       el('div', {},
         el('h1', {}, 'Leady / Prospecting'),
         el('p', { class: 'podtytul' }, 'Szybka kwalifikacja wstępna → (interesujące) głęboki scoring z researchem → Komitet Ofertowy')),
-      el('button', { class: 'btn btn-glowny', onclick: () => formularzLeada(grupy, sl, () => location.reload()) }, '+ Nowy lead')),
+      el('div', { style: 'display:flex; gap:8px; flex-wrap:wrap' },
+        el('button', { class: 'btn', onclick: () => masowaKwalifikacja(filtrGrupa, grupy) }, '⚡ Kwalifikuj wstępnie'),
+        el('button', { class: 'btn btn-glowny', onclick: () => formularzLeada(grupy, sl, () => location.reload()) }, '+ Nowy lead'))),
     el('div', { class: 'filtry' },
       el('select', { onchange: e => { widok = e.target.value; rysuj(); } },
         el('option', { value: 'sciezka' }, 'Widok: ścieżka (kanban)'),
@@ -84,6 +98,20 @@ export async function widokLeady(kontener, query = '') {
             ['przekazany do pipeline', 'Status: w pipeline'], ['', 'Status: wszystkie']].map(([v, l]) =>
           el('option', { value: v }, l)))),
     box);
+}
+
+function masowaKwalifikacja(filtrGrupa, grupy) {
+  const nazwaGrupy = filtrGrupa ? (grupy.find(g => String(g.id) === String(filtrGrupa))?.nazwa || '') : 'wszystkich grup';
+  modal('Wstępna kwalifikacja leadów', el('div', {},
+    el('div', { class: 'info-box' },
+      `Auto-triage leadów na etapie „Lead surowy" (${filtrGrupa ? 'grupa: ' + nazwaGrupy : 'wszystkie grupy'}) na podstawie danych z importu. `
+      + 'System sam odpowiada na pytania kwalifikacji z profilu (typologia, wartość, profil inwestora, dopasowanie) i przypisuje proces researchu. '
+      + 'Interesujące → przechodzą do kwalifikacji, twarda dyskwalifikacja → odpuszczone. Werdykty możesz potem ręcznie skorygować na każdym leadzie.')),
+    [['Uruchom kwalifikację', 'btn-glowny', async () => {
+      const stat = await POST('/leady/kwalifikuj-wstepnie', { grupa_id: filtrGrupa || null });
+      toast(`Przetworzono ${stat.przetworzone}: ${stat.interesujace} interesujących, ${stat.do_decyzji} do decyzji, ${stat.odpuszczone} odpuszczonych`);
+      location.reload();
+    }]]);
 }
 
 export async function widokLead(kontener, id) {

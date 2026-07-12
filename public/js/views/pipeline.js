@@ -44,7 +44,9 @@ export async function widokPipeline(kontener) {
               el('div', { class: 'kk-info' },
                 el('span', {}, pct(t.prawdopodobienstwo), t.korekta_reczna ? ' ✎' : ''),
                 el('span', {}, t.dzialania_otwarte ? `${t.dzialania_otwarte} dział.` : '')),
-              el('div', { style: 'margin-top:6px' }, pasekPrawd(t.prawdopodobienstwo)))));
+              el('div', { style: 'margin-top:6px' }, pasekPrawd(t.prawdopodobienstwo)),
+              t.status_e2e ? el('div', { class: 'kk-info', style: 'margin-top:6px' },
+                el('span', { class: 'badge badge-nieb', title: 'status procesu ofertowego (Intense)' }, '▶ ' + t.status_e2e)) : '')));
         })))),
 
     zamkniete.length ? el('div', {},

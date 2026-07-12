@@ -3,7 +3,7 @@ import { Router } from 'express';
 import { db, KOMPONENTY, NAZWY_KOMPONENTOW } from './db.js';
 import { parsujPlik, przygotujImport } from './import-ki.js';
 import { policzScore, przeliczLeada, opcjeWersji, zamrozWersje, logujLeada } from './scoring.js';
-import { werdyktKwalifikacji, generujIdTematu } from './kwalifikacja.js';
+import { werdyktKwalifikacji, generujIdTematu, autoOdpowiedzi, autoProces } from './kwalifikacja.js';
 
 export const api = Router();
 
@@ -400,6 +400,44 @@ api.post('/leady/:id/kwalifikacja', (req, res) => {
     logujLeada(lead.id, 'status', 'aktywny', 'odpuszczony', 'Zamknięty przedkomitetowo — kwalifikacja wstępna negatywna');
   }
   res.json({ ok: true, werdykt: finalny, sugestia: sugestia.werdykt });
+});
+
+// Masowa wstepna kwalifikacja: auto-triage leadow "Lead surowy" na podstawie danych z importu.
+// Werdykt sugerowany + proces researchu; handlowiec moze pozniej skorygowac na leadzie.
+api.post('/leady/kwalifikuj-wstepnie', (req, res) => {
+  const { grupa_id, tylko_bez_werdyktu = true } = req.body;
+  const pytania = db.prepare('SELECT * FROM pytania_kwalifikacji WHERE aktywny = 1').all();
+  let sql = `SELECT * FROM leady WHERE status = 'aktywny' AND kamien = 'Lead surowy'`;
+  const params = [];
+  if (grupa_id) { sql += ' AND grupa_id = ?'; params.push(grupa_id); }
+  if (tylko_bez_werdyktu) sql += ' AND (kwalif_wynik IS NULL OR kwalif_wynik = \'\')';
+  const leady = db.prepare(sql).all(...params);
+
+  const stat = { przetworzone: 0, interesujace: 0, do_decyzji: 0, odpuszczone: 0 };
+  db.exec('BEGIN');
+  try {
+    for (const lead of leady) {
+      let wybory = {};
+      try { wybory = JSON.parse(lead.wybory || '{}'); } catch {}
+      const odp = autoOdpowiedzi(lead, wybory, pytania);
+      const w = werdyktKwalifikacji(odp);
+      const proces = autoProces(wybory);
+      db.prepare('UPDATE leady SET kwalif_odpowiedzi = ?, kwalif_wynik = ?, proces_researchu = COALESCE(proces_researchu, ?) WHERE id = ?')
+        .run(JSON.stringify(odp), w.werdykt, proces, lead.id);
+      if (w.werdykt === 'odpuszczony') {
+        db.prepare(`UPDATE leady SET status = 'odpuszczony', powod_odpuszczenia = 'Kwalifikacja wstępna negatywna' WHERE id = ?`).run(lead.id);
+        stat.odpuszczone++;
+      } else {
+        db.prepare(`UPDATE leady SET kamien = 'Kwalifikacja wstępna' WHERE id = ?`).run(lead.id);
+        if (w.werdykt === 'interesujący') stat.interesujace++; else stat.do_decyzji++;
+      }
+      logujLeada(lead.id, 'kwalifikacja wstępna (auto)', 'Lead surowy', w.werdykt,
+        `${w.tak}× tak / ${w.nie}× nie · proces: ${proces}`);
+      stat.przetworzone++;
+    }
+    db.exec('COMMIT');
+  } catch (err) { db.exec('ROLLBACK'); throw err; }
+  res.json(stat);
 });
 
 // Fast-track: wyjatek od bramki scoringowej (np. temat od Zarzadu ponizej progu)
@@ -969,6 +1007,71 @@ api.post('/tematy/:id/status-e2e', (req, res) => {
     .run(t.id, 'status E2E (Intense)', t.status_e2e || '—', status_e2e || t.status_e2e,
       [wartosc_oferty ? `oferta ${wartosc_oferty} mln` : null, powod].filter(Boolean).join(' · ') || 'Aktualizacja ręczna statusu zwrotnego');
   res.json({ ok: true });
+});
+
+// ---------- PROGNOZA SPRZEDAZY ----------
+// Zalozenia konwersji z baseline 2025 (192 leady -> 57 ofert -> 14 wygranych, sr. kontrakt 25 mln).
+const ZAL = { bid_rate: 0.30, win_rate: 0.25, sr_kontrakt: 25, sr_marza: 9 };
+
+api.get('/prognoza', (req, res) => {
+  // --- Lejek konwersji (aktywne leady wg kamienia + dalsze etapy) ---
+  const wgKamienia = Object.fromEntries(
+    db.prepare(`SELECT kamien, COUNT(*) c FROM leady WHERE status = 'aktywny' GROUP BY kamien`).all().map(r => [r.kamien, r.c]));
+  const interesujace = db.prepare(`SELECT COUNT(*) c FROM leady WHERE status = 'aktywny' AND kwalif_wynik = 'interesujący'`).get().c;
+  const wKolejceKomitetu = db.prepare(`SELECT COUNT(*) c FROM leady WHERE kamien = 'Zakwalifikowany' AND status = 'aktywny' AND temat_id IS NULL`).get().c;
+
+  const tematyOtwarte = db.prepare(`SELECT * FROM tematy WHERE status = 'otwarty'`).all();
+  const tematyWygrane = db.prepare(`SELECT * FROM tematy WHERE status = 'wygrany'`).all();
+  const przegrane = db.prepare(`SELECT COUNT(*) c FROM tematy WHERE status = 'przegrany'`).get().c;
+
+  const lejek = [
+    { etap: 'Leady aktywne', liczba: Object.values(wgKamienia).reduce((s, c) => s + c, 0) },
+    { etap: 'Po kwalifikacji wstępnej', liczba: (wgKamienia['Kwalifikacja wstępna'] || 0) + (wgKamienia['Research'] || 0) + (wgKamienia['Scoring'] || 0) + (wgKamienia['Zakwalifikowany'] || 0) },
+    { etap: 'Interesujące', liczba: interesujace },
+    { etap: 'W kolejce Komitetu', liczba: wKolejceKomitetu },
+    { etap: 'W pipeline (tematy)', liczba: tematyOtwarte.length },
+    { etap: 'Wygrane', liczba: tematyWygrane.length },
+  ];
+
+  // --- Prognoza pipeline wazona po kwartalach ---
+  const kwartaly = {};
+  for (const t of tematyOtwarte) {
+    const start = t.termin_realizacji || t.data_startu;
+    if (!start || !t.wartosc_kontraktu || !t.czas_trwania_mies) continue;
+    const d0 = new Date(start); if (isNaN(d0)) continue;
+    const naMies = t.wartosc_kontraktu / t.czas_trwania_mies;
+    for (let m = 0; m < t.czas_trwania_mies; m++) {
+      const dd = new Date(d0.getFullYear(), d0.getMonth() + m, 1);
+      const q = `${dd.getFullYear()} Q${Math.floor(dd.getMonth() / 3) + 1}`;
+      kwartaly[q] ||= { kwartal: q, planowany: 0, wazony: 0 };
+      kwartaly[q].planowany += naMies;
+      kwartaly[q].wazony += naMies * (t.prawdopodobienstwo || 0) / 100;
+    }
+  }
+  const wartoscWazona = tematyOtwarte.reduce((s, t) => s + (t.wartosc_kontraktu || 0) * (t.prawdopodobienstwo || 0) / 100, 0);
+  const wartoscPipeline = tematyOtwarte.reduce((s, t) => s + (t.wartosc_kontraktu || 0), 0);
+
+  // --- Potencjal New Business z lejka (szacunek wg konwersji baseline) ---
+  const oczekiwaneTematy = Math.round(interesujace * ZAL.bid_rate);
+  const oczekiwaneWygrane = +(interesujace * ZAL.bid_rate * ZAL.win_rate).toFixed(1);
+  const oczekiwanyPrzychodNB = +(oczekiwaneWygrane * ZAL.sr_kontrakt).toFixed(1);
+  const oczekiwanaMarzaNB = +(oczekiwanyPrzychodNB * ZAL.sr_marza / 100).toFixed(1);
+
+  res.json({
+    zalozenia: ZAL,
+    lejek,
+    kwartaly: Object.values(kwartaly).sort((a, b) => a.kwartal.localeCompare(b.kwartal)),
+    pipeline: {
+      tematy: tematyOtwarte.length, wartosc: wartoscPipeline, wazona: wartoscWazona,
+      wygrane: tematyWygrane.length, przegrane,
+      marza_wazona: +(wartoscWazona * ZAL.sr_marza / 100).toFixed(1),
+    },
+    nowy_biznes: {
+      interesujace, oczekiwane_tematy: oczekiwaneTematy, oczekiwane_wygrane: oczekiwaneWygrane,
+      oczekiwany_przychod: oczekiwanyPrzychodNB, oczekiwana_marza: oczekiwanaMarzaNB,
+    },
+    prognoza_laczna: +(wartoscWazona + oczekiwanyPrzychodNB).toFixed(1),
+  });
 });
 
 // ---------- DASHBOARD ----------

@@ -21,6 +21,36 @@ export function werdyktKwalifikacji(odpowiedzi) {
   return { werdykt, tak, nie, brak };
 }
 
+// Auto-odpowiedzi na pytania kwalifikacji z danych leada (wybory scoringu + dyskwalifikacja).
+// Dopasowanie po slowach kluczowych w tresci pytania - dziala dla domyslnych pytan,
+// dla nietypowych/wlasnych zostawia "?" (handlowiec odpowie recznie).
+export function autoOdpowiedzi(lead, wybory, pytania) {
+  const A = wybory.A || '', B = wybory.B || '', C = wybory.C || '', E2 = wybory.E2 || '', F = wybory.F || '';
+  const odp = {};
+  for (const p of pytania) {
+    const t = (p.tekst || '').toLowerCase();
+    let a = '?';
+    if (/dyskwalifikacj/.test(t)) a = lead.dyskwalifikacja_x ? 'nie' : 'tak';
+    else if (/polska firma|klient końcow|operacyjn|deweloper spekul/.test(t))
+      a = /polska firma/i.test(C) ? 'tak' : (/deweloper|publiczn|własnym gw|ctp/i.test(C) ? 'nie' : '?');
+    else if (/produkcyjn|magazyn|segment/.test(t)) a = /produkcyjn|magazyn/i.test(A) ? 'tak' : (A ? 'nie' : '?');
+    else if (/wartoś|zasięg|\bmln\b/.test(t)) a = /brak danych/i.test(B) ? '?' : (/poza przedział/i.test(B) ? 'nie' : 'tak');
+    else if (/przewag|clean room|rozbudow|oze|referencj|instalacj/.test(t))
+      a = (/rozbudow/i.test(F) || (E2 && !/inna|brak/i.test(E2))) ? 'tak' : '?';
+    // "dobry powod kontaktu" i "wlasciwy moment" - brak danych na etapie importu => "?"
+    odp[p.id] = a;
+  }
+  return odp;
+}
+
+// Sugestia procesu researchu na podstawie profilu (wybory C / E2)
+export function autoProces(wybory) {
+  const C = wybory.C || '', E2 = wybory.E2 || '';
+  if (/deweloper/i.test(C)) return 'Deweloper magazynowy (trudny rynek)';
+  if (/farmac|biotech/i.test(E2)) return 'Farmacja / biotech';
+  return 'New Business — produkcja';
+}
+
 // Wspolne ID tematu: Inwestor_TypObiektu, unikalne, stabilne na cale zycie tematu
 export function generujIdTematu(klientNazwa, coPowstaje, fallback) {
   const oczysc = (s) => String(s || '')
