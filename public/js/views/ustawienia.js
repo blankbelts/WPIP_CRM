@@ -12,12 +12,18 @@ const NAZWY_SLOWNIKOW = {
   zrodlo_leada: 'Źródła leadów',
   typ_dzialania: 'Typy działań',
   kamien_prospectingu: 'Ścieżka pozyskania tematu (kamienie prospectingu)',
+  sposob_pozyskania: 'Sposób pozyskania leada',
+  zrodlo_wiedzy_wpip: 'Źródło wiedzy o WPIP',
+  proces_researchu: 'Procesy researchu (ścieżki kwalifikacji)',
+  status_e2e: 'Statusy zwrotne E2E (z Intense)',
+  typ_partnera: 'Typy partnerów biznesowych',
+  etap_partnera: 'Etapy pozyskania partnera',
   buyer_persona: 'Buyer persony (model wstępny)',
   miasto_referencyjne: 'Miasta referencyjne WPIP (komponent E3 — bliskość)',
 };
 
 export async function widokUstawienia(kontener) {
-  const [listaKart, slowniki] = await Promise.all([karty(true), GET('/slowniki')]);
+  const [listaKart, slowniki, pytania] = await Promise.all([karty(true), GET('/slowniki'), GET('/pytania-kwalifikacji')]);
 
   kontener.append(
     el('h1', {}, 'Ustawienia'),
@@ -43,6 +49,40 @@ export async function widokUstawienia(kontener) {
             }, 'Zmień hasło')));
         return form;
       })()),
+
+    // Pytania kwalifikacji wstepnej
+    el('div', { class: 'karta-box' },
+      el('h2', { style: 'margin-top:0' }, 'Pytania kwalifikacji wstępnej (szybka triage leadów)'),
+      el('div', { class: 'info-box' }, 'Najważniejsze pytania ze strategii sprzedaży — szybka selekcja lepszych i gorszych tematów przed głębokim scoringiem. „Dyskwalifikujące" = odpowiedź „nie" sugeruje odpuszczenie. Kalkulator na Komitet (K. Kowalski) jest w przebudowie — próg pozostaje decyzją handlowca.'),
+      tabela([
+        { naglowek: '#', klasa: 'wysrodkuj', render: p => String(p.kolejnosc + 1) },
+        { naglowek: 'Pytanie', render: p => p.tekst },
+        {
+          naglowek: 'Dyskwalifikujące', klasa: 'wysrodkuj', render: p => {
+            const chk = el('input', { type: 'checkbox' });
+            chk.checked = !!p.dyskwalifikujace;
+            chk.addEventListener('change', async () => { await PUT('/pytania-kwalifikacji/' + p.id, { dyskwalifikujace: chk.checked ? 1 : 0 }); toast('Zapisano'); });
+            return chk;
+          }
+        },
+        {
+          naglowek: '', klasa: 'wysrodkuj', render: p => el('button', {
+            class: 'btn btn-maly btn-czerwony', onclick: async () => { await DEL('/pytania-kwalifikacji/' + p.id); toast('Usunięto'); location.reload(); }
+          }, 'usuń')
+        },
+      ], pytania),
+      el('button', {
+        class: 'btn btn-maly', style: 'margin-top:8px', onclick: () => {
+          const form = el('div', { class: 'form-siatka' },
+            pole({ name: 'tekst', label: 'Treść pytania', wymagane: true, szerokie: true }),
+            pole({ name: 'dyskwalifikujace', label: 'Dyskwalifikujące?', typ: 'select', pusta: false, opcje: [[0, 'Nie'], [1, 'Tak — „nie" sugeruje odpuszczenie']] }));
+          modal('Nowe pytanie kwalifikacji', form, [['Dodaj', 'btn-glowny', async () => {
+            const d = zbierzForm(form);
+            if (!d.tekst) { toast('Treść wymagana', true); return false; }
+            await POST('/pytania-kwalifikacji', d); toast('Dodano'); location.reload();
+          }]]);
+        }
+      }, '+ dodaj pytanie')),
 
     // Karty ratingu (pipeline)
     el('div', { class: 'karta-box' },

@@ -145,6 +145,18 @@ export async function widokTemat(kontener, id) {
         poz('Data startu', dataPl(t.data_startu))),
       t.notatki ? el('div', { style: 'margin-top:10px' }, poz('Notatki', t.notatki)) : null),
 
+    // Status zwrotny E2E (temat lustrem procesu ofertowego w Intense)
+    el('div', { class: 'karta-box' },
+      el('div', { class: 'naglowek-akcje' },
+        el('h2', { style: 'margin-top:0' }, 'Status procesu ofertowego (E2E / Intense)'),
+        otwarty ? el('button', { class: 'btn btn-maly', onclick: () => aktualizujStatusE2e(t, sl, odswiez) }, 'Aktualizuj status zwrotny') : null),
+      el('div', { class: 'info-box' }, 'Kroki 6–13 procesu (kick-off, przygotowanie, Komitet Cenowy, Zarząd, wysyłka, wynik) prowadzi Intense. CRM czyta status zwrotny — w fazie 1 wpisywany ręcznie na spotkaniu pipeline’owym, docelowo z API.'),
+      el('div', { class: 'szczegoly' },
+        poz('Status E2E', t.status_e2e || '— nie rozpoczęto —'),
+        poz('Wartość oferty', t.wartosc_oferty ? mln(t.wartosc_oferty) + ' PLN' : '—'),
+        poz('Data decyzji', dataPl(t.data_decyzji_zwrotnej)),
+        poz('Powód (odrzucenie/przegrana)', t.powod_zwrotny || '—'))),
+
     // Dzialania outcome-driven
     el('div', { class: 'karta-box' },
       el('div', { class: 'naglowek-akcje' },
@@ -171,6 +183,18 @@ export async function widokTemat(kontener, id) {
 
 function poz(et, wa) {
   return el('div', { class: 'poz' }, el('div', { class: 'et' }, et), el('div', { class: 'wa' }, wa));
+}
+
+function aktualizujStatusE2e(t, sl, poZapisie) {
+  const form = el('div', { class: 'form-siatka' },
+    pole({ name: 'status_e2e', label: 'Status procesu (z Intense)', typ: 'select', wartosc: t.status_e2e, opcje: (sl.status_e2e || []).map(s => s.wartosc) }),
+    pole({ name: 'wartosc_oferty', label: 'Wartość oferty (mln PLN)', typ: 'number', step: '0.1', wartosc: t.wartosc_oferty }),
+    pole({ name: 'data_decyzji', label: 'Data decyzji', typ: 'date', wartosc: t.data_decyzji_zwrotnej }),
+    pole({ name: 'powod', label: 'Powód (odrzucenie / przegrana)', typ: 'textarea', wartosc: t.powod_zwrotny, szerokie: true }));
+  modal('Status zwrotny z procesu ofertowego', form, [['Zapisz', 'btn-glowny', async () => {
+    await POST(`/tematy/${t.id}/status-e2e`, zbierzForm(form));
+    toast('Status E2E zaktualizowany'); poZapisie?.();
+  }]]);
 }
 
 function formularzTematu(t, sl, poZapisie) {

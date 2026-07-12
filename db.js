@@ -258,6 +258,29 @@ CREATE TABLE IF NOT EXISTS konfiguracja (
   klucz TEXT PRIMARY KEY,
   wartosc TEXT
 );
+
+-- Pytania kwalifikacji wstepnej (szybka triage 5-7 pytan, edytowalne)
+CREATE TABLE IF NOT EXISTS pytania_kwalifikacji (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tekst TEXT NOT NULL,
+  kolejnosc INTEGER DEFAULT 0,
+  dyskwalifikujace INTEGER DEFAULT 0,
+  aktywny INTEGER DEFAULT 1
+);
+
+-- Partnerzy biznesowi (ambasadorzy, posrednicy, biura arch., inwestorzy zastepczy, zarzadcy)
+CREATE TABLE IF NOT EXISTS partnerzy (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  nazwa TEXT NOT NULL,
+  typ TEXT,
+  osoba_kontakt TEXT,
+  email TEXT,
+  telefon TEXT,
+  etap TEXT DEFAULT 'Research',
+  potencjal TEXT,
+  notatki TEXT,
+  utworzono TEXT DEFAULT (datetime('now'))
+);
 `);
 
 // ---------- SEED (tylko przy pustej bazie) ----------
@@ -274,8 +297,9 @@ if (kartCount === 0) {
     [2, 'Wstępna kwalifikacja', 15, 11, 25],
     [3, 'Oferta złożona', 35, 26, 50],
     [4, 'Preferowany wykonawca', 65, 51, 80],
-    [5, 'Decyzja biznesowa', 90, 81, 99],
-    [6, 'Umowa podpisana', 100, 100, 100],
+    [5, 'Decyzja biznesowa', 88, 81, 95],
+    [6, 'Kontraktacja', 97, 96, 99],
+    [7, 'Umowa podpisana', 100, 100, 100],
   ].forEach(k => insKamien.run(kartaId, ...k));
 
   const insSl = db.prepare('INSERT INTO slowniki (typ, wartosc, delta, kolejnosc) VALUES (?,?,?,?)');
@@ -300,8 +324,9 @@ if (kartCount === 0) {
   // Typy dzialan
   ['Telefon', 'E-mail', 'Spotkanie', 'Wizyta w Jasinie', 'LinkedIn', 'Konferencja / targi', 'Research (KRS/web)', 'Inne']
     .forEach((w, i) => insSl.run('typ_dzialania', w, null, i));
-  // Sciezka procesu pozyskania tematu (kamienie prospectingu, z Research po imporcie)
-  ['Lead surowy', 'Research', 'Lead wzbogacony', 'Pierwszy kontakt', 'Kontakt odpowiedział', 'Rozmowa poznawcza', 'Zakwalifikowany']
+  // Sciezka pozyskania tematu (wg doprecyzowania 12.07.2026):
+  // szybka kwalifikacja wstepna -> (interesujace) gleboki scoring z researchem -> Komitet
+  ['Lead surowy', 'Kwalifikacja wstępna', 'Research', 'Scoring', 'Zakwalifikowany']
     .forEach((w, i) => insSl.run('kamien_prospectingu', w, null, i));
   // Buyer persony (wstepny model - formalne po warsztacie 3)
   ['Persona 1 - Industrial Manufacturing', 'Persona 2 - Pharma / Biotech', 'Persona 3 - Proxy Investor']
@@ -365,6 +390,120 @@ if (wersjeCount === 0) {
   // F. Bonus rozbudowa (max 5)
   [['Rozbudowa istniejącego zakładu', 5], ['Nowa inwestycja', 0]]
     .forEach(([e, p], i) => ins.run(wersjaId, 'F', e, p, 0, i));
+}
+
+// ---------- MIGRACJA (idempotentna, dziala na istniejacej i swiezej bazie) ----------
+function dodajKolumne(tabela, kolumna, typ) {
+  const kolumny = db.prepare(`PRAGMA table_info(${tabela})`).all().map(c => c.name);
+  if (!kolumny.includes(kolumna)) db.exec(`ALTER TABLE ${tabela} ADD COLUMN ${kolumna} ${typ}`);
+}
+
+function seedSlownikJesliBrak(typ, wartosci) {
+  const jest = db.prepare('SELECT COUNT(*) c FROM slowniki WHERE typ = ?').get(typ).c;
+  if (jest > 0) return;
+  const ins = db.prepare('INSERT INTO slowniki (typ, wartosc, kolejnosc) VALUES (?,?,?)');
+  wartosci.forEach((w, i) => ins.run(typ, w, i));
+}
+
+(function migruj() {
+  // Nowe pola leada (proces pozyskania tematu + integracja E2E / Intense)
+  dodajKolumne('leady', 'identyfikator', 'TEXT');           // wspolne ID tematu (od leada po ZOS)
+  dodajKolumne('leady', 'sposob_pozyskania', 'TEXT');        // marketing/prospecting/AM/partner/Zarzad/polecenie
+  dodajKolumne('leady', 'zrodlo_wiedzy_wpip', 'TEXT');       // skad klient wie o WPIP (dla wszystkich)
+  dodajKolumne('leady', 'proces_researchu', 'TEXT');         // sciezka researchu przypisana w kwalifikacji wstepnej
+  dodajKolumne('leady', 'kwalif_odpowiedzi', "TEXT DEFAULT '{}'"); // JSON {pytanie_id: tak/nie/?}
+  dodajKolumne('leady', 'kwalif_wynik', 'TEXT');             // interesujacy / do decyzji / odpuszczony
+  dodajKolumne('leady', 'scoring_potwierdzony', 'INTEGER DEFAULT 0'); // scoring A-F potwierdzony po researchu
+  dodajKolumne('leady', 'fast_track', 'INTEGER DEFAULT 0');  // eskalacja / wyjatek od bramki (np. temat Zarzadu)
+  dodajKolumne('leady', 'fast_track_powod', 'TEXT');
+
+  // Statusy zwrotne z Intense na temacie (CRM czyta, nie edytuje procesu ofertowego)
+  dodajKolumne('tematy', 'status_e2e', 'TEXT');
+  dodajKolumne('tematy', 'wartosc_oferty', 'REAL');
+  dodajKolumne('tematy', 'data_decyzji_zwrotnej', 'TEXT');
+  dodajKolumne('tematy', 'powod_zwrotny', 'TEXT');
+
+  // Nowe slowniki (tylko jesli brak - nie klobruja edycji uzytkownika)
+  seedSlownikJesliBrak('sposob_pozyskania',
+    ['Marketing', 'Prospecting NB', 'Klient powracający (AM)', 'Partner', 'Zarząd', 'Polecenie']);
+  seedSlownikJesliBrak('zrodlo_wiedzy_wpip',
+    ['Polecenie / rekomendacja', 'Targi / konferencja', 'LinkedIn', 'Strona WWW WPIP', 'Prasa branżowa',
+     'Wydarzenie (np. THE CIRCLE)', 'Wcześniejsza realizacja', 'Wyszukiwarka', 'Inne']);
+  seedSlownikJesliBrak('proces_researchu',
+    ['New Business — produkcja', 'Deweloper magazynowy (trudny rynek)', 'Klient powracający — rozbudowa',
+     'Farmacja / biotech', 'Inwestor zastępczy / proxy']);
+  seedSlownikJesliBrak('status_e2e',
+    ['Kick-off oferty', 'Przygotowanie oferty', 'Komitet Cenowy', 'Akceptacja Zarządu',
+     'Oferta wysłana', 'Rewizja', 'Wygrana', 'Przegrana']);
+  seedSlownikJesliBrak('typ_partnera',
+    ['Ambasador', 'Pośrednik', 'Biuro architektoniczne', 'Inwestor zastępczy', 'Zarządca nieruchomości', 'Inny']);
+  seedSlownikJesliBrak('etap_partnera',
+    ['Research', 'Weryfikacja telefoniczna', 'Spotkanie', 'Profil w bazie (aktywny)', 'Odrzucony']);
+
+  // Powod odpuszczenia: dodaj wpis dla negatywnej kwalifikacji wstepnej
+  const maKwalif = db.prepare(`SELECT COUNT(*) c FROM slowniki WHERE typ='powod_odpuszczenia' AND wartosc='Kwalifikacja wstępna negatywna'`).get().c;
+  if (!maKwalif) {
+    db.prepare(`INSERT INTO slowniki (typ, wartosc, kolejnosc) VALUES ('powod_odpuszczenia','Kwalifikacja wstępna negatywna', 10)`).run();
+  }
+
+  // Reset sciezki na nowy zestaw TYLKO gdy to jeszcze stary zestaw (migracja jednorazowa)
+  const STARE = ['Lead surowy', 'Research', 'Lead wzbogacony', 'Pierwszy kontakt', 'Kontakt odpowiedział', 'Rozmowa poznawcza', 'Zakwalifikowany'];
+  const NOWE = ['Lead surowy', 'Kwalifikacja wstępna', 'Research', 'Scoring', 'Zakwalifikowany'];
+  const obecne = db.prepare(`SELECT wartosc FROM slowniki WHERE typ='kamien_prospectingu' AND aktywny=1 ORDER BY kolejnosc`).all().map(r => r.wartosc);
+  const jestStary = obecne.length === STARE.length && obecne.every((w, i) => w === STARE[i]);
+  if (jestStary) {
+    db.prepare(`DELETE FROM slowniki WHERE typ='kamien_prospectingu'`).run();
+    const ins = db.prepare(`INSERT INTO slowniki (typ, wartosc, kolejnosc) VALUES ('kamien_prospectingu', ?, ?)`);
+    NOWE.forEach((w, i) => ins.run(w, i));
+    // Przenies leady ze zlikwidowanych kamieni na najblizszy sensowny
+    const mapa = { 'Lead wzbogacony': 'Research', 'Pierwszy kontakt': 'Scoring', 'Kontakt odpowiedział': 'Scoring', 'Rozmowa poznawcza': 'Scoring' };
+    for (const [z, na] of Object.entries(mapa)) {
+      db.prepare('UPDATE leady SET kamien = ? WHERE kamien = ?').run(na, z);
+    }
+  }
+
+  // Backfill wspolnego ID tematu + sposobu pozyskania dla leadow sprzed tej zmiany
+  const bezId = db.prepare(`SELECT l.id, l.nazwa, l.wybory, l.zrodlo, k.nazwa AS klient
+    FROM leady l LEFT JOIN klienci k ON k.id = l.klient_id WHERE l.identyfikator IS NULL`).all();
+  if (bezId.length) {
+    const slug = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '')
+      .replace(/\b(sp\.?\s*z\s*o\.?\s*o\.?|s\.?a\.?|sp\.?j\.?|s\.?k\.?a\.?)\b/gi, '')
+      .replace(/[^a-zA-Z0-9]+/g, ' ').trim().split(/\s+/).slice(0, 2).join('');
+    const upd = db.prepare('UPDATE leady SET identyfikator = ?, sposob_pozyskania = COALESCE(sposob_pozyskania, ?) WHERE id = ?');
+    for (const l of bezId) {
+      let typ = 'inwestycja';
+      try { typ = slug(JSON.parse(l.wybory || '{}').A) || 'inwestycja'; } catch {}
+      const id = `${slug(l.klient || l.nazwa) || 'Temat'}_${typ}_${l.id}`;
+      const sposob = (l.zrodlo || '').includes('KI') ? 'Prospecting NB' : null;
+      upd.run(id, sposob, l.id);
+    }
+  }
+
+  // Etap Kontraktacja miedzy Decyzja biznesowa a Umowa podpisana (dla istniejacych kart)
+  for (const karta of db.prepare('SELECT id FROM karty_ratingu').all()) {
+    const ma = db.prepare(`SELECT COUNT(*) c FROM kamienie_karty WHERE karta_id=? AND nazwa='Kontraktacja'`).get(karta.id).c;
+    const umowa = db.prepare(`SELECT * FROM kamienie_karty WHERE karta_id=? AND nazwa='Umowa podpisana'`).get(karta.id);
+    if (!ma && umowa) {
+      db.prepare('UPDATE kamienie_karty SET kolejnosc = kolejnosc + 1 WHERE id = ?').run(umowa.id);
+      db.prepare(`INSERT INTO kamienie_karty (karta_id, kolejnosc, nazwa, prawd_start, prawd_min, prawd_max)
+        VALUES (?,?,?,?,?,?)`).run(karta.id, umowa.kolejnosc, 'Kontraktacja', 97, 96, 99);
+      db.prepare(`UPDATE kamienie_karty SET prawd_max=95, prawd_start=88 WHERE karta_id=? AND nazwa='Decyzja biznesowa'`).run(karta.id);
+    }
+  }
+})();
+
+// ---------- SEED pytan kwalifikacji wstepnej (5-7 pytan strategicznych) ----------
+if (db.prepare('SELECT COUNT(*) c FROM pytania_kwalifikacji').get().c === 0) {
+  const ins = db.prepare('INSERT INTO pytania_kwalifikacji (tekst, kolejnosc, dyskwalifikujace) VALUES (?,?,?)');
+  [
+    ['Brak twardej dyskwalifikacji (nie CTP, nie firma z własnym GW, nie zamówienie publiczne)?', 0, 1],
+    ['Klient końcowy / polska firma operacyjna (nie deweloper spekulacyjny)?', 1, 0],
+    ['Segment produkcyjny lub magazyn z komponentem produkcyjnym?', 2, 0],
+    ['Wartość w zasięgu WPIP (ok. 10–150 mln PLN)?', 3, 0],
+    ['Mamy przewagę (clean room, rozbudowa na żywym organizmie, OZE, instalacje własne, referencje w branży)?', 4, 0],
+    ['Jest realny punkt zaczepienia / dobry powód kontaktu (PWE)?', 5, 0],
+    ['Właściwy moment (jest pojemność ofertowa, brak konfliktu harmonogramowego)?', 6, 0],
+  ].forEach(p => ins.run(...p));
 }
 
 export const KOMPONENTY = ['A', 'B', 'C', 'D', 'E1', 'E2', 'E3', 'F'];

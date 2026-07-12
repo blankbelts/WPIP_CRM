@@ -6,6 +6,8 @@ import { widokScoring } from './views/scoring.js';
 import { widokKomitet } from './views/komitet.js';
 import { widokPipeline, widokTemat } from './views/pipeline.js';
 import { widokKlienci, widokKlient } from './views/klienci.js';
+import { widokPartnerzy } from './views/partnerzy.js';
+import { widokRaporty } from './views/raporty.js';
 import { widokDzialania } from './views/dzialania.js';
 import { widokUstawienia } from './views/ustawienia.js';
 import { toast } from './ui.js';
@@ -22,6 +24,8 @@ const trasy = [
   [/^\/tematy\/(\d+)$/, widokTemat],
   [/^\/klienci$/, widokKlienci],
   [/^\/klienci\/(\d+)$/, widokKlient],
+  [/^\/partnerzy$/, widokPartnerzy],
+  [/^\/raporty$/, widokRaporty],
   [/^\/dzialania$/, widokDzialania],
   [/^\/ustawienia$/, widokUstawienia],
 ];

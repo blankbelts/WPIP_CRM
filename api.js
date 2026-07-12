@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { db, KOMPONENTY, NAZWY_KOMPONENTOW } from './db.js';
 import { parsujPlik, przygotujImport } from './import-ki.js';
 import { policzScore, przeliczLeada, opcjeWersji, zamrozWersje, logujLeada } from './scoring.js';
+import { werdyktKwalifikacji, generujIdTematu } from './kwalifikacja.js';
 
 export const api = Router();
 
@@ -218,7 +219,8 @@ api.put('/osoby/:id', (req, res) => {
 
 // ---------- LEADY (prospecting - sciezka pozyskania tematu) ----------
 const LEAD_POLA = ['nazwa', 'klient_id', 'inwestycja_id', 'osoba_id', 'handlowiec', 'zrodlo',
-  'prawd_kwalifikacji', 'pwe', 'dobry_powod_kontaktu', 'notatki'];
+  'prawd_kwalifikacji', 'pwe', 'dobry_powod_kontaktu', 'notatki',
+  'sposob_pozyskania', 'zrodlo_wiedzy_wpip', 'proces_researchu', 'identyfikator'];
 
 api.get('/leady', (req, res) => {
   const { grupa } = req.query;
@@ -258,6 +260,8 @@ api.get('/leady/:id', (req, res) => {
   l.wystapienia = db.prepare(`SELECT lw.*, g.nazwa AS grupa_nazwa FROM lead_wystapienia lw
     LEFT JOIN grupy_leadow g ON g.id = lw.grupa_id WHERE lw.lead_id = ? ORDER BY lw.data`).all(l.id);
   l.kamienie = kamienieProspectingu();
+  l.kwalif_odpowiedzi = JSON.parse(l.kwalif_odpowiedzi || '{}');
+  l.pytania_kwalifikacji = db.prepare('SELECT * FROM pytania_kwalifikacji WHERE aktywny = 1 ORDER BY kolejnosc').all();
   res.json(l);
 });
 
@@ -270,6 +274,11 @@ api.post('/leady', (req, res) => {
   const grupa = db.prepare('SELECT * FROM grupy_leadow WHERE id = ?').get(grupa_id);
   if (!grupa?.wersja_id) return res.status(400).json({ error: 'Grupa nie ma przypisanej wersji scoringu' });
 
+  // Wspolne ID tematu generowane juz na leadzie (przekazywane pozniej do ZOS)
+  if (!d.identyfikator) {
+    const klient = d.klient_id ? db.prepare('SELECT nazwa FROM klienci WHERE id = ?').get(d.klient_id) : null;
+    d.identyfikator = generujIdTematu(klient?.nazwa, wybory.A, d.nazwa);
+  }
   const wynik = policzScore(wybory, grupa.wersja_id);
   const keys = Object.keys(d);
   const r = db.prepare(`INSERT INTO leady (${keys.join(',')}, grupa_id, wersja_id, wybory, score_total, priorytet, dyskwalifikacja_x, dyskwalifikacja_powod)
@@ -277,7 +286,7 @@ api.post('/leady', (req, res) => {
     .run(...keys.map(k => d[k]), grupa_id, grupa.wersja_id, JSON.stringify(wybory),
       wynik.total, wynik.priorytet, wynik.dyskwalifikacja, wynik.powod);
   const id = Number(r.lastInsertRowid);
-  logujLeada(id, 'utworzenie', null, `${wynik.total} / ${wynik.priorytet}`, `Dodany ręcznie do grupy "${grupa.nazwa}"`);
+  logujLeada(id, 'utworzenie', null, `${wynik.total} / ${wynik.priorytet}`, `Dodany ręcznie do grupy "${grupa.nazwa}" · ID ${d.identyfikator}`);
   zamrozWersje(grupa.wersja_id);
   res.json({ id, score_total: wynik.total, priorytet: wynik.priorytet });
 });
@@ -324,7 +333,10 @@ api.post('/leady/:id/research', (req, res) => {
   res.json({ ok: true });
 });
 
-// Przejscie kamienia sciezki = decyzja handlowca; bramka: A wymaga researchu ZIELONY/ZOLTY
+// Przejscie kamienia sciezki = decyzja handlowca. Bramki (fast_track omija bramki procesowe):
+//  - za "Kwalifikacja wstepna": wymagany werdykt "interesujacy" + przypisany proces researchu
+//  - za "Research": research ZIELONY/ZOLTY dla priorytetu A; CZERWONY blokuje zawsze
+//  - do "Zakwalifikowany": scoring A-F potwierdzony po researchu
 api.post('/leady/:id/kamien', (req, res) => {
   const { kamien } = req.body;
   const lead = db.prepare('SELECT * FROM leady WHERE id = ?').get(req.params.id);
@@ -333,19 +345,108 @@ api.post('/leady/:id/kamien', (req, res) => {
   const kamienie = kamienieProspectingu();
   const idxCel = kamienie.indexOf(kamien);
   if (idxCel < 0) return res.status(400).json({ error: 'Nieznany kamień ścieżki' });
-  const idxResearch = kamienie.indexOf('Research');
+  const idx = (n) => kamienie.indexOf(n);
+  const ft = lead.fast_track;
 
-  if (idxCel > idxResearch) {
+  // Bramka kwalifikacji wstepnej
+  if (idxCel > idx('Kwalifikacja wstępna') && !ft) {
+    if (lead.kwalif_wynik !== 'interesujący') {
+      return res.status(400).json({ error: 'Najpierw zakończ kwalifikację wstępną z werdyktem „interesujący" (albo oznacz lead jako fast-track / wyjątek od bramki)' });
+    }
+    if (!lead.proces_researchu) {
+      return res.status(400).json({ error: 'Przypisz proces researchu w kwalifikacji wstępnej przed przejściem dalej' });
+    }
+  }
+  // Bramka researchu
+  if (idxCel > idx('Research')) {
     if (lead.status_researchu === 'CZERWONY') {
       return res.status(400).json({ error: 'Research CZERWONY — lead powinien zostać odpuszczony, nie prowadzony dalej' });
     }
-    if (lead.priorytet === 'A' && !['ZIELONY', 'ŻÓŁTY'].includes(lead.status_researchu)) {
+    if (!ft && lead.priorytet === 'A' && !['ZIELONY', 'ŻÓŁTY'].includes(lead.status_researchu)) {
       return res.status(400).json({ error: 'Lead priorytetu A wymaga researchu (ZIELONY lub ŻÓŁTY) przed przejściem dalej' });
     }
   }
+  // Bramka finalnej oceny — scoring potwierdzony po researchu
+  if (kamien === 'Zakwalifikowany' && !ft && !lead.scoring_potwierdzony) {
+    return res.status(400).json({ error: 'Przed kwalifikacją do Komitetu potwierdź scoring A–F po researchu (sekcja „Scoring")' });
+  }
   db.prepare('UPDATE leady SET kamien = ? WHERE id = ?').run(kamien, lead.id);
-  logujLeada(lead.id, 'kamień ścieżki', lead.kamien, kamien, 'Decyzja handlowca');
+  logujLeada(lead.id, 'kamień ścieżki', lead.kamien, kamien, ft ? 'Fast-track (wyjątek od bramki)' : 'Decyzja handlowca');
   res.json({ ok: true });
+});
+
+// Kwalifikacja wstepna: zapis odpowiedzi + werdykt + przypisanie procesu researchu
+api.post('/leady/:id/kwalifikacja', (req, res) => {
+  const { odpowiedzi = {}, wynik, proces_researchu } = req.body;
+  const lead = db.prepare('SELECT * FROM leady WHERE id = ?').get(req.params.id);
+  if (!lead) return res.status(404).json({ error: 'Nie znaleziono leada' });
+  if (wynik && !['interesujący', 'do decyzji', 'odpuszczony'].includes(wynik)) {
+    return res.status(400).json({ error: 'Nieznany werdykt kwalifikacji' });
+  }
+  const sugestia = werdyktKwalifikacji(odpowiedzi);
+  const finalny = wynik || sugestia.werdykt;
+  db.prepare('UPDATE leady SET kwalif_odpowiedzi = ?, kwalif_wynik = ?, proces_researchu = COALESCE(?, proces_researchu) WHERE id = ?')
+    .run(JSON.stringify(odpowiedzi), finalny, proces_researchu || null, lead.id);
+  logujLeada(lead.id, 'kwalifikacja wstępna', lead.kwalif_wynik, finalny,
+    `${sugestia.tak}× tak / ${sugestia.nie}× nie` + (proces_researchu ? ` · proces: ${proces_researchu}` : ''));
+
+  // Werdykt "interesujacy" na etapie "Lead surowy" -> przesun na "Kwalifikacja wstepna"
+  if (lead.kamien === 'Lead surowy') {
+    db.prepare(`UPDATE leady SET kamien = 'Kwalifikacja wstępna' WHERE id = ?`).run(lead.id);
+  }
+  // Werdykt "odpuszczony" -> zamkniecie leada z powodem (przedkomitetowe)
+  if (finalny === 'odpuszczony') {
+    db.prepare(`UPDATE leady SET status = 'odpuszczony', powod_odpuszczenia = 'Kwalifikacja wstępna negatywna' WHERE id = ?`).run(lead.id);
+    logujLeada(lead.id, 'status', 'aktywny', 'odpuszczony', 'Zamknięty przedkomitetowo — kwalifikacja wstępna negatywna');
+  }
+  res.json({ ok: true, werdykt: finalny, sugestia: sugestia.werdykt });
+});
+
+// Fast-track: wyjatek od bramki scoringowej (np. temat od Zarzadu ponizej progu)
+api.post('/leady/:id/fast-track', (req, res) => {
+  const { powod } = req.body;
+  if (!powod) return res.status(400).json({ error: 'Fast-track wymaga uzasadnienia (kto i dlaczego eskaluje)' });
+  const lead = db.prepare('SELECT * FROM leady WHERE id = ?').get(req.params.id);
+  if (!lead) return res.status(404).json({ error: 'Nie znaleziono leada' });
+  db.prepare('UPDATE leady SET fast_track = 1, fast_track_powod = ? WHERE id = ?').run(powod, lead.id);
+  logujLeada(lead.id, 'fast-track', '0', '1', powod);
+  res.json({ ok: true });
+});
+
+// Potwierdzenie scoringu A-F po researchu (warunek wejscia na "Zakwalifikowany")
+api.post('/leady/:id/potwierdz-scoring', (req, res) => {
+  const lead = db.prepare('SELECT * FROM leady WHERE id = ?').get(req.params.id);
+  if (!lead) return res.status(404).json({ error: 'Nie znaleziono leada' });
+  const nowa = lead.scoring_potwierdzony ? 0 : 1;
+  db.prepare('UPDATE leady SET scoring_potwierdzony = ? WHERE id = ?').run(nowa, lead.id);
+  logujLeada(lead.id, 'scoring potwierdzony', String(lead.scoring_potwierdzony), String(nowa),
+    nowa ? 'Scoring A–F potwierdzony po researchu' : 'Cofnięto potwierdzenie scoringu');
+  res.json({ ok: true, scoring_potwierdzony: nowa });
+});
+
+// Pakiet handoff ZOS (krok 2 E2E) - komplet danych do przekazania do rejestru / Intense
+api.get('/leady/:id/zos', (req, res) => {
+  const l = db.prepare(`SELECT l.*, k.nazwa AS klient_nazwa, k.nip, k.branza AS klient_branza,
+      i.nazwa AS inwestycja_nazwa, i.wojewodztwo, i.miasto AS inwestycja_miasto, i.wartosc_inwestycji, i.etap_projektu,
+      o.imie_nazwisko AS osoba_nazwa, o.stanowisko, o.email, o.telefon
+    FROM leady l LEFT JOIN klienci k ON k.id = l.klient_id
+    LEFT JOIN inwestycje i ON i.id = l.inwestycja_id
+    LEFT JOIN osoby o ON o.id = l.osoba_id WHERE l.id = ?`).get(req.params.id);
+  if (!l) return res.status(404).json({ error: 'Nie znaleziono leada' });
+  res.json({
+    id_tematu: l.identyfikator,
+    kontrahent: l.klient_nazwa, nip: l.nip, branza: l.klient_branza,
+    opiekun: l.handlowiec,
+    sposob_pozyskania: l.sposob_pozyskania,
+    zrodlo_wiedzy_wpip: l.zrodlo_wiedzy_wpip,
+    proces_researchu: l.proces_researchu,
+    inwestycja: l.inwestycja_nazwa, lokalizacja: [l.inwestycja_miasto, l.wojewodztwo].filter(Boolean).join(', '),
+    wartosc_inwestycji: l.wartosc_inwestycji, etap: l.etap_projektu,
+    osoba_decyzyjna: l.osoba_nazwa, stanowisko: l.stanowisko, email: l.email, telefon: l.telefon,
+    scoring: `${l.score_total} pkt (priorytet ${l.priorytet})`,
+    kwalifikacja_wstepna: l.kwalif_wynik,
+    status_researchu: l.status_researchu,
+  });
 });
 
 // Wyjscia boczne sciezki: odpuszczony (powod obowiazkowy) / uspiony (nurture) / aktywny (powrot)
@@ -395,6 +496,8 @@ api.post('/komitet/decyzja', (req, res) => {
 
   let tematId = null;
   if (decyzja === 'bid') {
+    // Domyslnie dziedziczymy wspolne ID nadane juz na leadzie (jedno ID na cale zycie tematu)
+    if (temat && !temat.identyfikator) temat.identyfikator = lead.identyfikator;
     if (!temat?.identyfikator) return res.status(400).json({ error: 'Identyfikator tematu (Inwestor_TypInwestycji) jest wymagany' });
     const karta = temat.karta_id
       ? db.prepare('SELECT * FROM karty_ratingu WHERE id = ?').get(temat.karta_id)
@@ -696,8 +799,9 @@ api.post('/import/wykonaj', (req, res) => {
   const wstawKlienta = db.prepare(`INSERT INTO klienci (nazwa, zrodlo_pozyskania, branza, miasto, wojewodztwo, notatki) VALUES (?,?,?,?,?,?)`);
   const wstawLead = db.prepare(`INSERT INTO leady
     (nazwa, klient_id, inwestycja_id, grupa_id, wersja_id, handlowiec, zrodlo, kamien, prawd_kwalifikacji,
-     wybory, score_total, priorytet, dyskwalifikacja_x, dyskwalifikacja_powod, status_researchu, research_notatka, notatki)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+     wybory, score_total, priorytet, dyskwalifikacja_x, dyskwalifikacja_powod, status_researchu, research_notatka, notatki,
+     identyfikator, sposob_pozyskania)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
   const wstawWystapienie = db.prepare('INSERT INTO lead_wystapienia (lead_id, grupa_id, notatka) VALUES (?,?,?)');
 
   db.exec('BEGIN');
@@ -770,15 +874,17 @@ api.post('/import/wykonaj', (req, res) => {
         p.do_weryfikacji ? 'Profil inwestora (C) / branża (E2) nadane heurystycznie — do weryfikacji.' : null,
       ].filter(Boolean).join('\n');
 
+      const idTematu = generujIdTematu(p.klient_nazwa, p.wybory.A, p.nazwa_inwestycji);
+      const sposob = zrodloWpisu.includes('KI') || zrodloWpisu.toLowerCase().includes('sygnał') ? 'Prospecting NB' : null;
       const rLead = wstawLead.run(
         p.nazwa_inwestycji + (p.klient_nazwa ? ` (${p.klient_nazwa})` : ''),
         klientId, inw.id, grupa_id, grupa.wersja_id, handlowiec || null, zrodloWpisu, 'Lead surowy', 10,
         JSON.stringify(p.wybory), score.total, score.priorytet, score.dyskwalifikacja,
         score.powod || null, statusResearchu,
         statusResearchu !== 'SZARY' ? 'Status researchu przeniesiony z arkusza importu' : null,
-        notatki || null);
+        notatki || null, idTematu, sposob);
       logujLeada(Number(rLead.lastInsertRowid), 'utworzenie', null, `${score.total} / ${score.priorytet}`,
-        `Import do grupy "${grupa.nazwa}"`);
+        `Import do grupy "${grupa.nazwa}" · ID ${idTematu}`);
       stat.leady_nowe++;
       if (score.dyskwalifikacja) stat.dyskwalifikacje++;
     }
@@ -789,6 +895,80 @@ api.post('/import/wykonaj', (req, res) => {
     throw err;
   }
   res.json(stat);
+});
+
+// ---------- PYTANIA KWALIFIKACJI WSTEPNEJ (konfiguracja) ----------
+api.get('/pytania-kwalifikacji', (req, res) => {
+  res.json(db.prepare('SELECT * FROM pytania_kwalifikacji WHERE aktywny = 1 ORDER BY kolejnosc').all());
+});
+api.post('/pytania-kwalifikacji', (req, res) => {
+  const { tekst, dyskwalifikujace = 0 } = req.body;
+  if (!tekst) return res.status(400).json({ error: 'Treść pytania jest wymagana' });
+  const max = db.prepare('SELECT COALESCE(MAX(kolejnosc),-1) m FROM pytania_kwalifikacji').get().m;
+  const r = db.prepare('INSERT INTO pytania_kwalifikacji (tekst, kolejnosc, dyskwalifikujace) VALUES (?,?,?)')
+    .run(tekst, max + 1, dyskwalifikujace ? 1 : 0);
+  res.json({ id: Number(r.lastInsertRowid) });
+});
+api.put('/pytania-kwalifikacji/:id', (req, res) => {
+  updateById('pytania_kwalifikacji', req.params.id, pick(req.body, ['tekst', 'dyskwalifikujace', 'kolejnosc', 'aktywny']));
+  res.json({ ok: true });
+});
+api.delete('/pytania-kwalifikacji/:id', (req, res) => {
+  db.prepare('UPDATE pytania_kwalifikacji SET aktywny = 0 WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+// ---------- PARTNERZY BIZNESOWI ----------
+const PARTNER_POLA = ['nazwa', 'typ', 'osoba_kontakt', 'email', 'telefon', 'etap', 'potencjal', 'notatki'];
+api.get('/partnerzy', (req, res) => {
+  res.json(db.prepare('SELECT * FROM partnerzy ORDER BY nazwa').all());
+});
+api.post('/partnerzy', (req, res) => {
+  const d = pick(req.body, PARTNER_POLA);
+  if (!d.nazwa) return res.status(400).json({ error: 'Nazwa partnera jest wymagana' });
+  const keys = Object.keys(d);
+  const r = db.prepare(`INSERT INTO partnerzy (${keys.join(',')}) VALUES (${keys.map(() => '?').join(',')})`)
+    .run(...keys.map(k => d[k]));
+  res.json({ id: Number(r.lastInsertRowid) });
+});
+api.put('/partnerzy/:id', (req, res) => {
+  updateById('partnerzy', req.params.id, pick(req.body, PARTNER_POLA));
+  res.json({ ok: true });
+});
+
+// ---------- RAPORT WIN/LOSS (przeglad Dyr. Sprzedazy + Marketing) ----------
+api.get('/raporty/win-loss', (req, res) => {
+  const wygrane = db.prepare(`SELECT przyczyna_zamkniecia AS przyczyna, COUNT(*) c FROM tematy
+    WHERE status = 'wygrany' GROUP BY przyczyna_zamkniecia ORDER BY c DESC`).all();
+  const przegrane = db.prepare(`SELECT przyczyna_zamkniecia AS przyczyna, COUNT(*) c FROM tematy
+    WHERE status = 'przegrany' GROUP BY przyczyna_zamkniecia ORDER BY c DESC`).all();
+  // Odpuszczenia leadow (przedkomitetowe) + decyzje NO-BID Komitetu (pokomitetowe)
+  const odpuszczoneLeady = db.prepare(`SELECT powod_odpuszczenia AS powod, COUNT(*) c FROM leady
+    WHERE status = 'odpuszczony' GROUP BY powod_odpuszczenia ORDER BY c DESC`).all();
+  const noBid = db.prepare(`SELECT powod, COUNT(*) c FROM decyzje_komitetu
+    WHERE decyzja = 'no_bid' GROUP BY powod ORDER BY c DESC`).all();
+  const wygraneN = wygrane.reduce((s, r) => s + r.c, 0);
+  const przegraneN = przegrane.reduce((s, r) => s + r.c, 0);
+  res.json({
+    win_rate: (wygraneN + przegraneN) ? Math.round(100 * wygraneN / (wygraneN + przegraneN)) : null,
+    wygrane, przegrane, odpuszczone_leady: odpuszczoneLeady, no_bid: noBid,
+    lista: db.prepare(`SELECT identyfikator, nazwa, klient_id, status, przyczyna_zamkniecia, przyczyna_opis, wartosc_kontraktu
+      FROM tematy WHERE status IN ('wygrany','przegrany') ORDER BY utworzono DESC LIMIT 100`).all(),
+  });
+});
+
+// ---------- STATUS ZWROTNY E2E (temat lustrem procesu ofertowego w Intense) ----------
+api.post('/tematy/:id/status-e2e', (req, res) => {
+  const { status_e2e, wartosc_oferty, data_decyzji, powod } = req.body;
+  const t = db.prepare('SELECT * FROM tematy WHERE id = ?').get(req.params.id);
+  if (!t) return res.status(404).json({ error: 'Nie znaleziono tematu' });
+  db.prepare(`UPDATE tematy SET status_e2e = COALESCE(?, status_e2e), wartosc_oferty = COALESCE(?, wartosc_oferty),
+    data_decyzji_zwrotnej = COALESCE(?, data_decyzji_zwrotnej), powod_zwrotny = COALESCE(?, powod_zwrotny) WHERE id = ?`)
+    .run(status_e2e || null, wartosc_oferty ?? null, data_decyzji || null, powod || null, t.id);
+  db.prepare('INSERT INTO historia_tematu (temat_id, typ_zmiany, wartosc_przed, wartosc_po, opis) VALUES (?,?,?,?,?)')
+    .run(t.id, 'status E2E (Intense)', t.status_e2e || '—', status_e2e || t.status_e2e,
+      [wartosc_oferty ? `oferta ${wartosc_oferty} mln` : null, powod].filter(Boolean).join(' · ') || 'Aktualizacja ręczna statusu zwrotnego');
+  res.json({ ok: true });
 });
 
 // ---------- DASHBOARD ----------

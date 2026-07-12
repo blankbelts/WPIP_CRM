@@ -10,12 +10,12 @@ export async function widokPulpit(kontener) {
 
   kontener.append(
     el('h1', {}, 'Pulpit'),
-    el('p', { class: 'podtytul' }, 'New Business: od sygnału inwestycyjnego do wygranego kontraktu'),
+    el('p', { class: 'podtytul' }, 'New Business: od sygnału inwestycyjnego do wygranego kontraktu · baseline 2025: 192 leady → 57 ofert → 14 wygranych (356 mln PLN), win rate 25%, śr. kontrakt 25 mln'),
 
     el('div', { class: 'kafle' },
       kafel('Wartość pipeline', mln(d.wartosc_pipeline) + ' PLN', `${d.tematy_otwarte} tematów otwartych`),
       kafel('Pipeline ważony', mln(d.wartosc_wazona) + ' PLN', 'suma wartość × prawdopodobieństwo'),
-      kafel('Win rate', d.win_rate === null ? '—' : d.win_rate + '%', `${d.wygrane} wygranych / ${d.przegrane} przegranych (baseline ~23%)`),
+      kafel('Win rate', d.win_rate === null ? '—' : d.win_rate + '%', `${d.wygrane} wygranych / ${d.przegrane} przegranych (baseline 2025: 25%)`),
       kafel('Leady priorytet A', prio.A || 0, `B: ${prio.B || 0} · C: ${prio.C || 0} · D: ${prio.D || 0} · X: ${prio.X || 0}`),
       kafel('Kolejka Komitetu', d.kolejka_komitetu, `bid: ${dec.bid || 0} · no bid: ${dec.no_bid || 0} · defer: ${dec.defer || 0}`),
     ),
