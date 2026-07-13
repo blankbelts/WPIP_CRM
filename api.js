@@ -4,6 +4,7 @@ import { db, KOMPONENTY, NAZWY_KOMPONENTOW } from './db.js';
 import { parsujPlik, przygotujImport } from './import-ki.js';
 import { policzScore, przeliczLeada, opcjeWersji, zamrozWersje, logujLeada } from './scoring.js';
 import { werdyktKwalifikacji, generujIdTematu, autoOdpowiedzi, autoProces } from './kwalifikacja.js';
+import { przeliczTemat, dniWEtapie, czyZastygly, sprawdzRecykling } from './silnik-pipeline.js';
 
 export const api = Router();
 
@@ -504,6 +505,40 @@ api.post('/leady/:id/status', (req, res) => {
   res.json({ ok: true });
 });
 
+// Uruchomienie tematu z leada na M1 pipeline persony (lead = top lejka, temat od M1)
+api.post('/leady/:id/uruchom-temat', (req, res) => {
+  const lead = db.prepare('SELECT * FROM leady WHERE id = ?').get(req.params.id);
+  if (!lead) return res.status(404).json({ error: 'Nie znaleziono leada' });
+  if (lead.temat_id) return res.status(400).json({ error: 'Lead ma już powiązany temat' });
+
+  // Persona/pipeline: FAST-TRACK dla klienta powracającego, inaczej STANDARD
+  let kod = req.body.pipeline_kod;
+  if (!kod) kod = /powracaj/i.test(lead.proces_researchu || '') ? 'FAST_TRACK' : 'STANDARD';
+  const karta = db.prepare('SELECT * FROM karty_ratingu WHERE kod = ?').get(kod);
+  if (!karta) return res.status(400).json({ error: 'Nie znaleziono pipeline persony: ' + kod });
+  const m1 = db.prepare('SELECT * FROM kamienie_karty WHERE karta_id = ? ORDER BY kolejnosc LIMIT 1').get(karta.id);
+
+  let identyfikator = lead.identyfikator;
+  if (!identyfikator || db.prepare('SELECT 1 FROM tematy WHERE identyfikator = ?').get(identyfikator)) {
+    const klient = lead.klient_id ? db.prepare('SELECT nazwa FROM klienci WHERE id = ?').get(lead.klient_id) : null;
+    identyfikator = generujIdTematu(klient?.nazwa, null, lead.nazwa);
+  }
+
+  const r = db.prepare(`INSERT INTO tematy
+    (identyfikator, nazwa, klient_id, inwestycja_id, osoba_id, handlowiec, zrodlo, model_realizacji,
+     data_startu, marza_pct, karta_id, kamien_id, prawdopodobienstwo, status, czy_bierzemy, lead_id)
+    VALUES (?,?,?,?,?,?,?,?,date('now'),9,?,?,?, 'otwarty','ofertujemy',?)`)
+    .run(identyfikator, lead.nazwa, lead.klient_id, lead.inwestycja_id, lead.osoba_id, lead.handlowiec,
+      lead.zrodlo, 'Generalne wykonawstwo', karta.id, m1.id, Math.round(m1.prawd_start / 2), lead.id);
+  const tematId = Number(r.lastInsertRowid);
+  db.prepare('INSERT INTO milestone_wejscia (temat_id, kamien_id) VALUES (?, ?)').run(tematId, m1.id);
+  db.prepare('UPDATE leady SET temat_id = ?, status = ? WHERE id = ?').run(tematId, 'przekazany do pipeline', lead.id);
+  logujLeada(lead.id, 'uruchomienie tematu', lead.kamien, 'pipeline: ' + karta.nazwa, `Temat ${identyfikator} na kamieniu M1`);
+  db.prepare('INSERT INTO historia_tematu (temat_id, typ_zmiany, wartosc_po, opis) VALUES (?,?,?,?)')
+    .run(tematId, 'utworzenie', `${m1.kod} ${m1.nazwa}`, `Uruchomiony z leada "${lead.nazwa}" · pipeline ${karta.nazwa}`);
+  res.json({ id: tematId, identyfikator, pipeline: karta.nazwa });
+});
+
 // ---------- KOMITET OFERTOWY ----------
 api.get('/komitet/kolejka', (req, res) => {
   res.json(db.prepare(`
@@ -598,20 +633,24 @@ const TEMAT_POLA = ['nazwa', 'klient_id', 'inwestycja_id', 'osoba_id', 'handlowi
   'termin_realizacji', 'czas_trwania_mies', 'czy_bierzemy', 'powod_odpuszczenia', 'notatki'];
 
 api.get('/tematy', (req, res) => {
-  res.json(db.prepare(`
-    SELECT t.*, k.nazwa AS klient_nazwa, km.nazwa AS kamien_nazwa, km.kolejnosc AS kamien_kolejnosc,
-      km.prawd_min, km.prawd_max, kr.nazwa AS karta_nazwa,
+  sprawdzRecykling();
+  const tematy = db.prepare(`
+    SELECT t.*, k.nazwa AS klient_nazwa, km.nazwa AS kamien_nazwa, km.kod AS kamien_kod, km.kolejnosc AS kamien_kolejnosc,
+      km.prawd_min, km.prawd_max, km.prog_zastygniecia_dni, kr.nazwa AS karta_nazwa, kr.kod AS pipeline_kod,
       (SELECT COUNT(*) FROM dzialania d WHERE d.temat_id = t.id AND d.status = 'planowane') AS dzialania_otwarte
     FROM tematy t
     LEFT JOIN klienci k ON k.id = t.klient_id
     LEFT JOIN kamienie_karty km ON km.id = t.kamien_id
     LEFT JOIN karty_ratingu kr ON kr.id = t.karta_id
-    ORDER BY km.kolejnosc DESC, t.wartosc_kontraktu DESC`).all());
+    ORDER BY km.kolejnosc DESC, t.wartosc_kontraktu DESC`).all();
+  for (const t of tematy) { t.dni_w_etapie = dniWEtapie(t); t.zastygly = czyZastygly(t); }
+  res.json(tematy);
 });
 api.get('/tematy/:id', (req, res) => {
   const t = db.prepare(`
-    SELECT t.*, k.nazwa AS klient_nazwa, km.nazwa AS kamien_nazwa, km.kolejnosc AS kamien_kolejnosc,
-      km.prawd_min, km.prawd_max, kr.nazwa AS karta_nazwa, o.imie_nazwisko AS osoba_nazwa,
+    SELECT t.*, k.nazwa AS klient_nazwa, km.nazwa AS kamien_nazwa, km.kod AS kamien_kod, km.kolejnosc AS kamien_kolejnosc,
+      km.prawd_min, km.prawd_max, km.definicja_spelnienia, km.prog_zastygniecia_dni,
+      kr.nazwa AS karta_nazwa, kr.kod AS pipeline_kod, o.imie_nazwisko AS osoba_nazwa,
       i.nazwa AS inwestycja_nazwa
     FROM tematy t
     LEFT JOIN klienci k ON k.id = t.klient_id
@@ -622,9 +661,71 @@ api.get('/tematy/:id', (req, res) => {
     WHERE t.id = ?`).get(req.params.id);
   if (!t) return res.status(404).json({ error: 'Nie znaleziono tematu' });
   t.kamienie = db.prepare('SELECT * FROM kamienie_karty WHERE karta_id = ? ORDER BY kolejnosc').all(t.karta_id);
+  const potw = db.prepare('SELECT * FROM potwierdzenia_kamieni WHERE temat_id = ? ORDER BY data').all(t.id);
+  const potwSet = new Set(potw.map(p => p.kamien_id));
+  for (const km of t.kamienie) {
+    km.potwierdzony = potwSet.has(km.id);
+    km.szablony = db.prepare('SELECT * FROM task_szablony WHERE kamien_id = ? AND aktywny = 1 ORDER BY kolejnosc').all(km.id);
+  }
+  t.potwierdzenia = potw;
+  t.dni_w_etapie = dniWEtapie(t);
+  t.zastygly = czyZastygly(t);
+  t.szablony_kamienia = db.prepare('SELECT * FROM task_szablony WHERE kamien_id = ? AND aktywny = 1 ORDER BY kolejnosc').all(t.kamien_id);
   t.dzialania = db.prepare('SELECT * FROM dzialania WHERE temat_id = ? ORDER BY termin').all(t.id);
   t.historia = db.prepare('SELECT * FROM historia_tematu WHERE temat_id = ? ORDER BY data DESC').all(t.id);
   res.json(t);
+});
+
+// Potwierdzenie kamienia (MilestoneConfirmation) - JEDYNA droga awansu, wymaga dowodu
+api.post('/tematy/:id/potwierdz-kamien', (req, res) => {
+  const { kamien_id, dowod, potwierdzajacy } = req.body;
+  const t = db.prepare('SELECT * FROM tematy WHERE id = ?').get(req.params.id);
+  if (!t) return res.status(404).json({ error: 'Nie znaleziono tematu' });
+  if (t.status !== 'otwarty') return res.status(400).json({ error: 'Temat nie jest otwarty' });
+  const km = db.prepare('SELECT * FROM kamienie_karty WHERE id = ? AND karta_id = ?').get(kamien_id, t.karta_id);
+  if (!km) return res.status(400).json({ error: 'Kamień nie należy do pipeline tego tematu' });
+  if (!dowod) return res.status(400).json({ error: `Potwierdzenie kamienia "${km.kod}" wymaga dowodu (fakt po stronie klienta: notatka, data, dokument)` });
+  if (db.prepare('SELECT 1 FROM potwierdzenia_kamieni WHERE temat_id = ? AND kamien_id = ?').get(t.id, kamien_id)) {
+    return res.status(400).json({ error: 'Kamień już potwierdzony' });
+  }
+  db.prepare('INSERT INTO potwierdzenia_kamieni (temat_id, kamien_id, dowod, potwierdzajacy) VALUES (?,?,?,?)')
+    .run(t.id, kamien_id, dowod, potwierdzajacy || t.handlowiec || null);
+  const stan = przeliczTemat(t.id);
+  db.prepare('INSERT INTO historia_tematu (temat_id, typ_zmiany, wartosc_przed, wartosc_po, opis) VALUES (?,?,?,?,?)')
+    .run(t.id, 'potwierdzenie kamienia', `${t.prawdopodobienstwo}%`, `${stan.prawdopodobienstwo}%`,
+      `${km.kod} potwierdzony (dowód: ${String(dowod).slice(0, 120)})`);
+  res.json({ ok: true, ...stan });
+});
+
+// Cofniecie potwierdzenia (korekta) - z powodem
+api.post('/tematy/:id/cofnij-kamien', (req, res) => {
+  const { kamien_id, powod } = req.body;
+  const t = db.prepare('SELECT * FROM tematy WHERE id = ?').get(req.params.id);
+  if (!t) return res.status(404).json({ error: 'Nie znaleziono tematu' });
+  if (!powod) return res.status(400).json({ error: 'Cofnięcie potwierdzenia wymaga powodu' });
+  const km = db.prepare('SELECT * FROM kamienie_karty WHERE id = ?').get(kamien_id);
+  db.prepare('DELETE FROM potwierdzenia_kamieni WHERE temat_id = ? AND kamien_id = ?').run(t.id, kamien_id);
+  const stan = przeliczTemat(t.id);
+  db.prepare('INSERT INTO historia_tematu (temat_id, typ_zmiany, wartosc_przed, wartosc_po, opis) VALUES (?,?,?,?,?)')
+    .run(t.id, 'cofnięcie kamienia', `${t.prawdopodobienstwo}%`, `${stan.prawdopodobienstwo}%`, `${km?.kod || ''} cofnięty: ${powod}`);
+  res.json({ ok: true, ...stan });
+});
+
+// Powody zamkniecia dla etapu (per kamien_kod)
+api.get('/powody-zamkniecia', (req, res) => {
+  const { kamien_kod } = req.query;
+  let sql = 'SELECT * FROM powody_zamkniecia WHERE aktywny = 1';
+  const params = [];
+  if (kamien_kod) { sql += ' AND (kamien_kod = ? OR kamien_kod IS NULL)'; params.push(kamien_kod); }
+  res.json(db.prepare(sql + ' ORDER BY kamien_kod, id').all(...params));
+});
+
+// Pula recyklingu + reczne sprawdzenie
+api.get('/recykling', (req, res) => {
+  sprawdzRecykling();
+  res.json(db.prepare(`SELECT t.*, k.nazwa AS klient_nazwa, km.kod AS kamien_kod, km.nazwa AS kamien_nazwa
+    FROM tematy t LEFT JOIN klienci k ON k.id = t.klient_id LEFT JOIN kamienie_karty km ON km.id = t.kamien_id
+    WHERE t.status = 'recycled' ORDER BY t.recycle_date`).all());
 });
 api.put('/tematy/:id', (req, res) => {
   updateById('tematy', req.params.id, pick(req.body, TEMAT_POLA));
@@ -670,20 +771,41 @@ api.post('/tematy/:id/prawdopodobienstwo', (req, res) => {
 });
 
 api.post('/tematy/:id/zamknij', (req, res) => {
-  const { status, przyczyna, opis } = req.body;
+  const { status, przyczyna, powod_id, opis } = req.body;
   if (!['wygrany', 'przegrany', 'odrzucony', 'wstrzymany'].includes(status)) {
     return res.status(400).json({ error: 'Nieznany status zamkniecia' });
   }
-  if (['wygrany', 'przegrany'].includes(status) && !przyczyna) {
-    return res.status(400).json({ error: 'Kod przyczyny jest obowiazkowy przy wygranej/przegranej' });
-  }
   const t = db.prepare('SELECT * FROM tematy WHERE id = ?').get(req.params.id);
   if (!t) return res.status(404).json({ error: 'Nie znaleziono tematu' });
-  const prawd = status === 'wygrany' ? 100 : (status === 'przegrany' || status === 'odrzucony' ? 0 : t.prawdopodobienstwo);
+
+  // Powod przegranej/odrzucenia = slownik per etap (moze byc recyklingowalny)
+  let powod = przyczyna || null, recyklPowrot = null;
+  if (['przegrany', 'odrzucony'].includes(status)) {
+    if (!powod_id && !przyczyna) return res.status(400).json({ error: 'Powód zamknięcia (słownik per etap) jest obowiązkowy' });
+    if (powod_id) {
+      const p = db.prepare('SELECT * FROM powody_zamkniecia WHERE id = ?').get(powod_id);
+      if (!p) return res.status(400).json({ error: 'Nieznany powód zamknięcia' });
+      powod = p.nazwa;
+      if (p.czy_recyklingowalny) {
+        recyklPowrot = db.prepare(`SELECT date('now', '+' || ? || ' months') d`).get(p.offset_powrotu_mies || 6).d;
+      }
+    }
+  }
+  if (status === 'wygrany' && !przyczyna) return res.status(400).json({ error: 'Kod przyczyny jest obowiazkowy przy wygranej' });
+
+  if (recyklPowrot) {
+    // Nie tracimy leada - trafia do puli recyklingu z data powrotu
+    db.prepare('UPDATE tematy SET status = ?, przyczyna_zamkniecia = ?, przyczyna_opis = ?, recycle_date = ? WHERE id = ?')
+      .run('recycled', powod, opis || null, recyklPowrot, t.id);
+    db.prepare('INSERT INTO historia_tematu (temat_id, typ_zmiany, wartosc_przed, wartosc_po, opis) VALUES (?,?,?,?,?)')
+      .run(t.id, 'recykling', t.status, 'recycled', `${powod} — powrót ${recyklPowrot}`);
+    return res.json({ ok: true, recycled: true, recycle_date: recyklPowrot });
+  }
+  const prawd = status === 'wygrany' ? 100 : (['przegrany', 'odrzucony'].includes(status) ? 0 : t.prawdopodobienstwo);
   db.prepare('UPDATE tematy SET status = ?, przyczyna_zamkniecia = ?, przyczyna_opis = ?, prawdopodobienstwo = ? WHERE id = ?')
-    .run(status, przyczyna || null, opis || null, prawd, t.id);
+    .run(status, powod, opis || null, prawd, t.id);
   db.prepare('INSERT INTO historia_tematu (temat_id, typ_zmiany, wartosc_przed, wartosc_po, opis) VALUES (?,?,?,?,?)')
-    .run(t.id, 'zamkniecie', t.status, status, `${przyczyna || ''} ${opis || ''}`.trim());
+    .run(t.id, 'zamkniecie', t.status, status, `${powod || ''} ${opis || ''}`.trim());
   res.json({ ok: true });
 });
 
