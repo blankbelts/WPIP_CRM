@@ -3,6 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { seedPipeline } from './seed-pipeline.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Na Railway ustaw DATA_DIR na sciezke wolumenu (np. /data), inaczej baza znika przy deployu
@@ -281,6 +282,47 @@ CREATE TABLE IF NOT EXISTS partnerzy (
   notatki TEXT,
   utworzono TEXT DEFAULT (datetime('now'))
 );
+
+-- Pipeline v2: biblioteka zadan per kamien (TaskTemplate)
+CREATE TABLE IF NOT EXISTS task_szablony (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kamien_id INTEGER REFERENCES kamienie_karty(id) ON DELETE CASCADE,
+  nazwa TEXT NOT NULL,
+  oczekiwany_efekt TEXT,
+  co_dalej_sukces TEXT,
+  co_dalej_porazka TEXT,
+  typ TEXT,
+  kolejnosc INTEGER DEFAULT 0,
+  aktywny INTEGER DEFAULT 1
+);
+
+-- Potwierdzenie kamienia (MilestoneConfirmation) - jedyna droga awansu, fakt + dowod
+CREATE TABLE IF NOT EXISTS potwierdzenia_kamieni (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  temat_id INTEGER REFERENCES tematy(id) ON DELETE CASCADE,
+  kamien_id INTEGER REFERENCES kamienie_karty(id),
+  data TEXT DEFAULT (datetime('now')),
+  dowod TEXT,
+  potwierdzajacy TEXT
+);
+
+-- Wejscia tematu w kamienie - do liczenia czasu w etapie i zastygniecia
+CREATE TABLE IF NOT EXISTS milestone_wejscia (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  temat_id INTEGER REFERENCES tematy(id) ON DELETE CASCADE,
+  kamien_id INTEGER REFERENCES kamienie_karty(id),
+  data_wejscia TEXT DEFAULT (datetime('now'))
+);
+
+-- Powody zamkniecia per kamien (CloseReason) z flaga recyklingu i offsetem powrotu
+CREATE TABLE IF NOT EXISTS powody_zamkniecia (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kamien_kod TEXT,
+  nazwa TEXT NOT NULL,
+  czy_recyklingowalny INTEGER DEFAULT 0,
+  offset_powrotu_mies INTEGER DEFAULT 0,
+  aktywny INTEGER DEFAULT 1
+);
 `);
 
 // ---------- SEED (tylko przy pustej bazie) ----------
@@ -423,6 +465,18 @@ function seedSlownikJesliBrak(typ, wartosci) {
   dodajKolumne('tematy', 'data_decyzji_zwrotnej', 'TEXT');
   dodajKolumne('tematy', 'powod_zwrotny', 'TEXT');
 
+  // Pipeline v2 - persona/kamienie-fakty, recykling, powiazanie z leadem zrodlowym
+  dodajKolumne('karty_ratingu', 'persona', 'TEXT');
+  dodajKolumne('karty_ratingu', 'kod', 'TEXT');
+  dodajKolumne('kamienie_karty', 'kod', 'TEXT');
+  dodajKolumne('kamienie_karty', 'definicja_spelnienia', 'TEXT'); // opis dowodu spelnienia
+  dodajKolumne('kamienie_karty', 'prog_zastygniecia_dni', 'INTEGER');
+  dodajKolumne('kamienie_karty', 'wymiary_scoringu', 'TEXT');
+  dodajKolumne('kamienie_karty', 'elastyczna_kolejnosc', 'INTEGER DEFAULT 0');
+  dodajKolumne('dzialania', 'template_id', 'INTEGER');
+  dodajKolumne('tematy', 'recycle_date', 'TEXT');
+  dodajKolumne('tematy', 'lead_id', 'INTEGER');
+
   // Nowe slowniki (tylko jesli brak - nie klobruja edycji uzytkownika)
   seedSlownikJesliBrak('sposob_pozyskania',
     ['Marketing', 'Prospecting NB', 'Klient powracający (AM)', 'Partner', 'Zarząd', 'Polecenie']);
@@ -491,6 +545,9 @@ function seedSlownikJesliBrak(typ, wartosci) {
     }
   }
 })();
+
+// Seed pipeline v2 (STANDARD M1-M8 + FAST-TRACK F1-F4) - po migracji kolumn
+seedPipeline(db);
 
 // ---------- SEED pytan kwalifikacji wstepnej (5-7 pytan strategicznych) ----------
 if (db.prepare('SELECT COUNT(*) c FROM pytania_kwalifikacji').get().c === 0) {
