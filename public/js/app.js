@@ -2,6 +2,7 @@
 import { widokPulpit } from './views/dashboard.js';
 import { widokRoadmapa } from './views/roadmapa.js';
 import { widokRecykling } from './views/recykling.js';
+import { widokMetryki } from './views/metryki.js';
 import { widokLeady, widokLead } from './views/leady.js';
 import { widokImport } from './views/import.js';
 import { widokScoring } from './views/scoring.js';
@@ -19,6 +20,7 @@ import { toast } from './ui.js';
 const trasy = [
   [/^\/$/, widokRoadmapa],
   [/^\/pulpit$/, widokPulpit],
+  [/^\/metryki$/, widokMetryki],
   [/^\/recykling$/, widokRecykling],
   [/^\/leady$/, widokLeady],
   [/^\/leady\/(\d+)$/, widokLead],

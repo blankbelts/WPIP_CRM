@@ -476,6 +476,8 @@ function seedSlownikJesliBrak(typ, wartosci) {
   dodajKolumne('dzialania', 'template_id', 'INTEGER');
   dodajKolumne('tematy', 'recycle_date', 'TEXT');
   dodajKolumne('tematy', 'lead_id', 'INTEGER');
+  // Account Management: plan opieki nad kontem powracajacym (data nastepnego przegladu)
+  dodajKolumne('klienci', 'data_nastepnego_przegladu', 'TEXT');
 
   // Nowe slowniki (tylko jesli brak - nie klobruja edycji uzytkownika)
   seedSlownikJesliBrak('sposob_pozyskania',

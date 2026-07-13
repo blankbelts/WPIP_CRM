@@ -170,7 +170,8 @@ api.post('/grupy/:id/przelicz', (req, res) => {
 
 // ---------- KLIENCI ----------
 const KLIENT_POLA = ['nazwa', 'nip', 'zrodlo_pozyskania', 'klient_powracajacy', 'opiekun', 'branza',
-  'miasto', 'wojewodztwo', 'potencjal_oze', 'dyskwalifikacja', 'powod_dyskwalifikacji', 'notatki'];
+  'miasto', 'wojewodztwo', 'potencjal_oze', 'dyskwalifikacja', 'powod_dyskwalifikacji', 'notatki',
+  'data_nastepnego_przegladu'];
 
 api.get('/klienci', (req, res) => {
   res.json(db.prepare(`
@@ -1240,6 +1241,81 @@ api.get('/prognoza', (req, res) => {
       oczekiwany_przychod: oczekiwanyPrzychodNB, oczekiwana_marza: oczekiwanaMarzaNB,
     },
     prognoza_laczna: +(wartoscWazona + oczekiwanyPrzychodNB).toFixed(1),
+  });
+});
+
+// ---------- METRYKI PIPELINE (dashboard v2) ----------
+function mediana(arr) {
+  if (!arr.length) return null;
+  const s = [...arr].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : Math.round((s[m - 1] + s[m]) / 2);
+}
+
+api.get('/metryki', (req, res) => {
+  sprawdzRecykling();
+
+  // Wejscia w kamienie (do lejka konwersji i czasu w etapie)
+  const wejscia = db.prepare(`
+    SELECT mw.temat_id, mw.data_wejscia, km.kod, km.kolejnosc, kr.kod AS pipeline_kod, kr.nazwa AS pipeline_nazwa
+    FROM milestone_wejscia mw
+    JOIN kamienie_karty km ON km.id = mw.kamien_id
+    JOIN karty_ratingu kr ON kr.id = km.karta_id
+    ORDER BY mw.temat_id, mw.data_wejscia`).all();
+
+  // Lejek: distinct tematy ktore weszly w dany kamien (per pipeline, kolejnosc)
+  const lejekMap = {};      // pipeline_kod -> kod -> {kolejnosc, nazwa_pipe, tematy:Set}
+  const czasyEtapu = {};    // kod -> [dni]
+  const perTemat = {};      // temat_id -> [{kod, data, kolejnosc}]
+  for (const w of wejscia) {
+    (lejekMap[w.pipeline_kod] ||= {});
+    (lejekMap[w.pipeline_kod][w.kod] ||= { kolejnosc: w.kolejnosc, pipeline: w.pipeline_nazwa, tematy: new Set() }).tematy.add(w.temat_id);
+    (perTemat[w.temat_id] ||= []).push({ kod: w.kod, data: w.data_wejscia, kolejnosc: w.kolejnosc });
+  }
+  // Czas w etapie z kolejnych wejsc tego samego tematu (zakonczone etapy)
+  for (const [, lista] of Object.entries(perTemat)) {
+    lista.sort((a, b) => a.data.localeCompare(b.data));
+    for (let i = 0; i < lista.length - 1; i++) {
+      const dni = Math.round((new Date(lista[i + 1].data + 'Z') - new Date(lista[i].data + 'Z')) / 86400000);
+      if (dni >= 0) (czasyEtapu[lista[i].kod] ||= []).push(dni);
+    }
+  }
+  const lejek = Object.entries(lejekMap).map(([pipe, kody]) => ({
+    pipeline: pipe,
+    etapy: Object.entries(kody).sort((a, b) => a[1].kolejnosc - b[1].kolejnosc).map(([kod, v], i, arr) => {
+      const liczba = v.tematy.size;
+      const poprz = i > 0 ? arr[i - 1][1].tematy.size : null;
+      return { kod, liczba, konwersja: poprz ? Math.round(100 * liczba / poprz) : null, mediana_dni: mediana(czasyEtapu[kod] || []) };
+    }),
+  }));
+
+  // Rozklad powodow utraty per etap (na ktorym kamieniu temat sie zamknal)
+  const utrata = db.prepare(`
+    SELECT km.kod AS kamien_kod, t.przyczyna_zamkniecia AS powod, t.status, COUNT(*) c
+    FROM tematy t LEFT JOIN kamienie_karty km ON km.id = t.kamien_id
+    WHERE t.status IN ('przegrany', 'odrzucony', 'recycled')
+    GROUP BY km.kod, t.przyczyna_zamkniecia, t.status ORDER BY c DESC`).all();
+
+  // Skutecznosc typow zadan (ktore typy najczesciej maja efekt osiagniety)
+  const zadania = db.prepare(`
+    SELECT typ, COUNT(*) total,
+      SUM(CASE WHEN wynik = 'Osiągnięty' THEN 1 ELSE 0 END) osiagniete
+    FROM dzialania WHERE status = 'wykonane' AND wynik IS NOT NULL AND typ IS NOT NULL
+    GROUP BY typ ORDER BY total DESC`).all();
+  for (const z of zadania) z.skutecznosc = z.total ? Math.round(100 * z.osiagniete / z.total) : null;
+
+  // Coverage Account Management (konta powracajace z planem opieki)
+  const am = db.prepare(`SELECT COUNT(*) total,
+    SUM(CASE WHEN data_nastepnego_przegladu IS NOT NULL THEN 1 ELSE 0 END) z_planem,
+    SUM(CASE WHEN data_nastepnego_przegladu <= date('now') THEN 1 ELSE 0 END) zalegle
+    FROM klienci WHERE klient_powracajacy = 1`).get();
+
+  res.json({
+    lejek, utrata, zadania,
+    am_coverage: {
+      konta: am.total || 0, z_planem: am.z_planem || 0, zalegle: am.zalegle || 0,
+      pokrycie_pct: am.total ? Math.round(100 * (am.z_planem || 0) / am.total) : null,
+    },
   });
 });
 
