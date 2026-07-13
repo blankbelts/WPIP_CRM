@@ -123,9 +123,11 @@ export async function widokTemat(kontener, id) {
     // --- Status E2E (Intense) ---
     el('div', { class: 'karta-box' },
       el('div', { class: 'naglowek-akcje' },
-        el('h2', { style: 'margin-top:0' }, 'Status procesu ofertowego (E2E / Intense)'),
-        otwarty ? el('button', { class: 'btn btn-maly', onclick: () => aktualizujStatusE2e(t, sl, odswiez) }, 'Aktualizuj status zwrotny') : null),
-      el('div', { class: 'info-box' }, 'Kroki 6–13 (kick-off, przygotowanie, Komitet Cenowy, Zarząd, wysyłka, wynik) prowadzi Intense. CRM czyta status zwrotny — faza 1: ręcznie.'),
+        el('h2', { style: 'margin-top:0' }, 'Status procesu ofertowego (E2E) ', badge('źródło: Intense', 'nieb')),
+        el('div', { style: 'display:flex; gap:8px' },
+          el('button', { class: 'btn btn-maly', onclick: () => pokazZos(t) }, 'Pakiet handoff (ZOS) →'),
+          otwarty ? el('button', { class: 'btn btn-maly', onclick: () => aktualizujStatusE2e(t, sl, odswiez) }, 'Wpisz status (faza 1)') : null)),
+      el('div', { class: 'info-box' }, 'Kroki 6–13 (kick-off, przygotowanie, Komitet Cenowy, Zarząd, wysyłka, wynik) prowadzi Intense — te pola są docelowo read-only ze źródłem w Intense. Faza 1 integracji: wpisywane ręcznie; faza 2: przez API.'),
       el('div', { class: 'szczegoly' },
         poz('Status E2E', t.status_e2e || '— nie rozpoczęto —'),
         poz('Wartość oferty', t.wartosc_oferty ? mln(t.wartosc_oferty) + ' PLN' : '—'),
@@ -271,6 +273,25 @@ function przeniesStandard(t, poZapisie) {
       const r = await POST(`/tematy/${t.id}/przenies-standard`, { powod: powod.value });
       toast(`Przeniesiony do STANDARD M5 → ${r.prawdopodobienstwo}%`); poZapisie?.();
     }]]);
+}
+
+async function pokazZos(t) {
+  const z = await GET(`/tematy/${t.id}/zos`);
+  const wiersze = [
+    ['ID tematu', z.id_tematu], ['Kontrahent', z.kontrahent], ['NIP', z.nip], ['Branża', z.branza],
+    ['Opiekun', z.opiekun], ['Sposób pozyskania', z.sposob_pozyskania], ['Źródło wiedzy o WPIP', z.zrodlo_wiedzy_wpip],
+    ['Inwestycja', z.inwestycja], ['Lokalizacja', z.lokalizacja],
+    ['Wartość inwestycji', z.wartosc_inwestycji ? z.wartosc_inwestycji + ' mln' : null],
+    ['Wartość kontraktu WPIP', z.wartosc_kontraktu ? z.wartosc_kontraktu + ' mln' : null],
+    ['Model realizacji', z.model_realizacji], ['Etap', z.etap],
+    ['Osoba decyzyjna', z.osoba_decyzyjna], ['Stanowisko', z.stanowisko], ['E-mail', z.email], ['Telefon', z.telefon],
+    ['Scoring', z.scoring],
+  ].filter(([, v]) => v);
+  const tekst = wiersze.map(([k, v]) => `${k}: ${v}`).join('\n');
+  const ta = el('textarea', { style: 'width:100%; min-height:280px; font-family:monospace; font-size:12px' }, tekst);
+  modal('Pakiet handoff do ZOS / Intense', el('div', {},
+    el('div', { class: 'info-box' }, 'Komplet danych CRM → Intense przy rejestracji ZOS (krok 2 modelu integracji). Faza 1: skopiuj poniżej.'), ta),
+    [['Kopiuj do schowka', 'btn-glowny', async () => { await navigator.clipboard.writeText(tekst); toast('Skopiowano pakiet handoff'); return false; }]]);
 }
 
 function aktualizujStatusE2e(t, sl, poZapisie) {

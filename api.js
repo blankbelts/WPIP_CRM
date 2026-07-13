@@ -1230,6 +1230,27 @@ api.get('/raporty/win-loss', (req, res) => {
   });
 });
 
+// Pakiet handoff do ZOS/Intense z poziomu tematu (krok 2 modelu integracji CRM->Intense)
+api.get('/tematy/:id/zos', (req, res) => {
+  const t = db.prepare(`SELECT t.*, k.nazwa AS klient_nazwa, k.nip, k.branza AS klient_branza,
+      i.nazwa AS inwestycja_nazwa, i.wojewodztwo, i.miasto AS inwestycja_miasto, i.wartosc_inwestycji, i.etap_projektu,
+      o.imie_nazwisko AS osoba_nazwa, o.stanowisko, o.email, o.telefon,
+      l.sposob_pozyskania, l.zrodlo_wiedzy_wpip, l.score_total, l.priorytet
+    FROM tematy t LEFT JOIN klienci k ON k.id = t.klient_id
+    LEFT JOIN inwestycje i ON i.id = t.inwestycja_id
+    LEFT JOIN osoby o ON o.id = t.osoba_id
+    LEFT JOIN leady l ON l.id = t.lead_id WHERE t.id = ?`).get(req.params.id);
+  if (!t) return res.status(404).json({ error: 'Nie znaleziono tematu' });
+  res.json({
+    id_tematu: t.identyfikator, kontrahent: t.klient_nazwa, nip: t.nip, branza: t.klient_branza,
+    opiekun: t.handlowiec, sposob_pozyskania: t.sposob_pozyskania, zrodlo_wiedzy_wpip: t.zrodlo_wiedzy_wpip,
+    inwestycja: t.inwestycja_nazwa, lokalizacja: [t.inwestycja_miasto, t.wojewodztwo].filter(Boolean).join(', '),
+    wartosc_inwestycji: t.wartosc_inwestycji, wartosc_kontraktu: t.wartosc_kontraktu, model_realizacji: t.model_realizacji,
+    etap: t.etap_projektu, osoba_decyzyjna: t.osoba_nazwa, stanowisko: t.stanowisko, email: t.email, telefon: t.telefon,
+    scoring: t.score_total ? `${t.score_total} pkt (priorytet ${t.priorytet})` : null,
+  });
+});
+
 // ---------- STATUS ZWROTNY E2E (temat lustrem procesu ofertowego w Intense) ----------
 api.post('/tematy/:id/status-e2e', (req, res) => {
   const { status_e2e, wartosc_oferty, data_decyzji, powod } = req.body;
