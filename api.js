@@ -2,6 +2,7 @@
 import { Router } from 'express';
 import { db, KOMPONENTY, NAZWY_KOMPONENTOW } from './db.js';
 import { parsujPlik, przygotujImport } from './import-ki.js';
+import { parsujPipeline } from './import-pipeline.js';
 import { policzScore, przeliczLeada, opcjeWersji, zamrozWersje, logujLeada } from './scoring.js';
 import { werdyktKwalifikacji, generujIdTematu, autoOdpowiedzi, autoProces } from './kwalifikacja.js';
 import { przeliczTemat, dniWEtapie, czyZastygly, sprawdzRecykling } from './silnik-pipeline.js';
@@ -1403,6 +1404,96 @@ api.get('/metryki', (req, res) => {
       pokrycie_pct: am.total ? Math.round(100 * (am.z_planem || 0) / am.total) : null,
     },
   });
+});
+
+// ---------- IMPORT REALNEGO PIPELINE (arkusz K. Latosia) ----------
+// Etap interpretowany z % wygranej: temat trafia na kamien, w ktorego pasmo wpada %,
+// wczesniejsze kamienie auto-potwierdzone (dowod: stan z importu).
+function interpretujPipeline(pozycje) {
+  const std = db.prepare(`SELECT * FROM karty_ratingu WHERE kod = 'STANDARD'`).get();
+  const kamienie = db.prepare('SELECT * FROM kamienie_karty WHERE karta_id = ? ORDER BY kolejnosc').all(std.id);
+  const m1 = kamienie[0];
+  const znajdzTemat = db.prepare('SELECT id FROM tematy WHERE identyfikator = ?');
+  return { std, kamienie, propozycje: pozycje.map(p => {
+    const pc = p.prawd_pct;
+    const kamien = pc != null ? (kamienie.find(k => pc >= k.prawd_min && pc <= k.prawd_max) || m1) : m1;
+    const doPotwierdzenia = kamienie.filter(k => k.kolejnosc < kamien.kolejnosc);
+    const idBaza = (p.klient_nazwa || p.inwestor).normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-zA-Z0-9]+/g, '').slice(0, 20)
+      + '_' + (p.rodzaj || 'inw').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-zA-Z0-9]+/g, '').slice(0, 10);
+    return { ...p, kamien_kod: kamien.kod, kamien_nazwa: kamien.nazwa, kamien_id: kamien.id,
+      potwierdzone_kody: doPotwierdzenia.map(k => k.kod), potwierdzone_ids: doPotwierdzenia.map(k => k.id),
+      identyfikator_baza: idBaza, duplikat: false };
+  }) };
+}
+
+api.post('/import/pipeline/podglad', (req, res) => {
+  const { base64 } = req.body;
+  if (!base64) return res.status(400).json({ error: 'Brak pliku' });
+  const pozycje = parsujPipeline(Buffer.from(base64, 'base64'));
+  const { propozycje } = interpretujPipeline(pozycje);
+  const znajdz = db.prepare('SELECT id FROM tematy WHERE identyfikator LIKE ?');
+  for (const p of propozycje) p.duplikat = !!znajdz.get(p.identyfikator_baza + '%');
+  res.json({ propozycje });
+});
+
+api.post('/import/pipeline/wykonaj', (req, res) => {
+  const { wiersze, handlowiec } = req.body;
+  if (!Array.isArray(wiersze) || !wiersze.length) return res.status(400).json({ error: 'Brak wierszy do importu' });
+  const std = db.prepare(`SELECT * FROM karty_ratingu WHERE kod = 'STANDARD'`).get();
+  const kamienie = db.prepare('SELECT * FROM kamienie_karty WHERE karta_id = ? ORDER BY kolejnosc').all(std.id);
+  const stat = { tematy_nowe: 0, klienci_nowi: 0, osoby_nowe: 0, pominiete: 0 };
+
+  const znajdzKlienta = db.prepare('SELECT id FROM klienci WHERE lower(nazwa) = lower(?)');
+  const wstawKlienta = db.prepare('INSERT INTO klienci (nazwa, zrodlo_pozyskania, notatki) VALUES (?,?,?)');
+  const znajdzOsobe = db.prepare('SELECT id FROM osoby WHERE klient_id = ? AND lower(imie_nazwisko) = lower(?)');
+  const wstawOsobe = db.prepare('INSERT INTO osoby (klient_id, imie_nazwisko, stanowisko, rola_w_decyzji) VALUES (?,?,?,?)');
+
+  db.exec('BEGIN');
+  try {
+    for (const p of wiersze) {
+      let identyfikator = generujIdTematu(p.klient_nazwa, p.rodzaj, p.inwestor);
+      // Klient (dedup po nazwie)
+      let klientId = null;
+      if (p.klient_nazwa) {
+        const ist = znajdzKlienta.get(p.klient_nazwa);
+        if (ist) klientId = ist.id;
+        else { klientId = Number(wstawKlienta.run(p.klient_nazwa, 'Pipeline (import)', p.inwestor !== p.klient_nazwa ? 'Z pipeline: ' + p.inwestor : null).lastInsertRowid); stat.klienci_nowi++; }
+      }
+      // Osoba
+      let osobaId = null;
+      if (p.osoba?.imie_nazwisko && klientId) {
+        const isto = znajdzOsobe.get(klientId, p.osoba.imie_nazwisko);
+        if (isto) osobaId = isto.id;
+        else { osobaId = Number(wstawOsobe.run(klientId, p.osoba.imie_nazwisko, p.osoba.stanowisko, p.osoba.rola_w_decyzji).lastInsertRowid); stat.osoby_nowe++; }
+      }
+      const kamien = kamienie.find(k => k.kod === p.kamien_kod) || kamienie[0];
+      const potwierdzone = kamienie.filter(k => k.kolejnosc < kamien.kolejnosc);
+      const prawd = p.prawd_pct != null ? p.prawd_pct : Math.round(kamien.prawd_start / 2);
+
+      const r = db.prepare(`INSERT INTO tematy
+        (identyfikator, nazwa, klient_id, osoba_id, handlowiec, zrodlo, model_realizacji, co_budujemy,
+         data_startu, wartosc_kontraktu, marza_pct, termin_oferty, termin_realizacji, czas_trwania_mies,
+         karta_id, kamien_id, prawdopodobienstwo, korekta_reczna, status, czy_bierzemy)
+        VALUES (?,?,?,?,?,?,?,?,date('now'),?,?,?,?,?,?,?,?,?, 'otwarty','ofertujemy')`)
+        .run(identyfikator, p.inwestor, klientId, osobaId, handlowiec || 'K. Latoś', 'Pipeline (import)',
+          p.model_realizacji || 'Generalne wykonawstwo', p.rodzaj || null, p.wartosc || 0, p.marza_pct ?? 9,
+          p.termin_oferty || null, p.termin_realizacji || null, p.czas_trwania_mies || 12,
+          std.id, kamien.id, prawd, p.prawd_pct != null ? 1 : 0);
+      const tematId = Number(r.lastInsertRowid);
+      // Auto-potwierdzenie wczesniejszych kamieni (stan z importu)
+      for (const km of potwierdzone) {
+        db.prepare('INSERT INTO potwierdzenia_kamieni (temat_id, kamien_id, dowod, potwierdzajacy) VALUES (?,?,?,?)')
+          .run(tematId, km.id, `Stan z importu pipeline (${prawd}% wygranej)`, handlowiec || 'K. Latoś');
+      }
+      db.prepare('INSERT INTO milestone_wejscia (temat_id, kamien_id) VALUES (?,?)').run(tematId, kamien.id);
+      db.prepare('INSERT INTO historia_tematu (temat_id, typ_zmiany, wartosc_po, opis) VALUES (?,?,?,?)')
+        .run(tematId, 'import pipeline', `${kamien.kod} / ${prawd}%`,
+          `Zaimportowany z realnego pipeline; ${potwierdzone.length} kamieni auto-potwierdzonych`);
+      stat.tematy_nowe++;
+    }
+    db.exec('COMMIT');
+  } catch (err) { db.exec('ROLLBACK'); throw err; }
+  res.json(stat);
 });
 
 // ---------- DASHBOARD ----------

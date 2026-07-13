@@ -5,6 +5,7 @@ import { widokRecykling } from './views/recykling.js';
 import { widokMetryki } from './views/metryki.js';
 import { widokLeady, widokLead } from './views/leady.js';
 import { widokImport } from './views/import.js';
+import { widokImportPipeline } from './views/importPipeline.js';
 import { widokScoring } from './views/scoring.js';
 import { widokKomitet } from './views/komitet.js';
 import { widokPipeline, widokTemat } from './views/pipeline.js';
@@ -25,6 +26,7 @@ const trasy = [
   [/^\/leady$/, widokLeady],
   [/^\/leady\/(\d+)$/, widokLead],
   [/^\/import$/, widokImport],
+  [/^\/import-pipeline$/, widokImportPipeline],
   [/^\/scoring$/, widokScoring],
   [/^\/komitet$/, widokKomitet],
   [/^\/pipeline$/, widokPipeline],
