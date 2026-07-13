@@ -21,6 +21,33 @@ function updateById(table, id, data) {
   db.prepare(`UPDATE ${table} SET ${sets} WHERE id = ?`).run(...keys.map(k => data[k]), id);
 }
 
+// Regula 6: po wygranej utworz temat obserwacyjny F1-watch (przeglad konta za 6 mc)
+function utworzF1Watch(zrodlo) {
+  if (!zrodlo.klient_id) return null;
+  const fast = db.prepare(`SELECT * FROM karty_ratingu WHERE kod = 'FAST_TRACK'`).get();
+  if (!fast) return null;
+  const f1 = db.prepare('SELECT * FROM kamienie_karty WHERE karta_id = ? ORDER BY kolejnosc LIMIT 1').get(fast.id);
+  const klient = db.prepare('SELECT nazwa FROM klienci WHERE id = ?').get(zrodlo.klient_id);
+  const id = generujIdTematu(klient?.nazwa, 'obserwacja', 'F1watch');
+  const r = db.prepare(`INSERT INTO tematy
+    (identyfikator, nazwa, klient_id, handlowiec, zrodlo, data_startu, marza_pct, karta_id, kamien_id, prawdopodobienstwo, status, czy_bierzemy)
+    VALUES (?,?,?,?,?,date('now'),9,?,?,?, 'otwarty','obserwujemy')`)
+    .run(id, 'F1-watch: przegląd konta po wygranej', zrodlo.klient_id, zrodlo.handlowiec,
+      'F1-watch (po wygranej)', fast.id, f1.id, Math.round(f1.prawd_start / 2));
+  const tematId = Number(r.lastInsertRowid);
+  db.prepare('INSERT INTO milestone_wejscia (temat_id, kamien_id) VALUES (?, ?)').run(tematId, f1.id);
+  db.prepare(`INSERT INTO dzialania (typ, cel, temat_id, klient_id, kamien_id, termin, status, notatki)
+    VALUES ('spotkanie', ?, ?, ?, ?, date('now','+6 months'), 'planowane', ?)`)
+    .run('Przegląd konta — potwierdź sygnał rozwojowy (F1)', tematId, zrodlo.klient_id, f1.id,
+      `Auto-utworzone po wygranej tematu ${zrodlo.identyfikator}`);
+  // Konto staje sie powracajace z planem opieki
+  db.prepare(`UPDATE klienci SET klient_powracajacy = 1,
+    data_nastepnego_przegladu = COALESCE(data_nastepnego_przegladu, date('now','+6 months')) WHERE id = ?`).run(zrodlo.klient_id);
+  db.prepare('INSERT INTO historia_tematu (temat_id, typ_zmiany, wartosc_po, opis) VALUES (?,?,?,?)')
+    .run(tematId, 'F1-watch', 'F1', `Utworzony po wygranej ${zrodlo.identyfikator}; przegląd konta za 6 mc`);
+  return { id: tematId, identyfikator: id };
+}
+
 function kamienieProspectingu() {
   return db.prepare(`SELECT wartosc FROM slowniki WHERE typ = 'kamien_prospectingu' AND aktywny = 1 ORDER BY kolejnosc`)
     .all().map(r => r.wartosc);
@@ -699,7 +726,9 @@ api.post('/tematy/:id/potwierdz-kamien', (req, res) => {
   db.prepare('INSERT INTO historia_tematu (temat_id, typ_zmiany, wartosc_przed, wartosc_po, opis) VALUES (?,?,?,?,?)')
     .run(t.id, 'potwierdzenie kamienia', `${t.prawdopodobienstwo}%`, `${stan.prawdopodobienstwo}%`,
       `${km.kod} potwierdzony (dowód: ${String(dowod).slice(0, 120)})`);
-  res.json({ ok: true, ...stan });
+  // WYGRANA potwierdzona -> temat obserwacyjny F1-watch
+  const f1 = stan.wygrany ? utworzF1Watch(db.prepare('SELECT * FROM tematy WHERE id = ?').get(t.id)) : null;
+  res.json({ ok: true, ...stan, f1_watch: f1 });
 });
 
 // Cofniecie potwierdzenia (korekta) - z powodem
@@ -714,6 +743,41 @@ api.post('/tematy/:id/cofnij-kamien', (req, res) => {
   db.prepare('INSERT INTO historia_tematu (temat_id, typ_zmiany, wartosc_przed, wartosc_po, opis) VALUES (?,?,?,?,?)')
     .run(t.id, 'cofnięcie kamienia', `${t.prawdopodobienstwo}%`, `${stan.prawdopodobienstwo}%`, `${km?.kod || ''} cofnięty: ${powod}`);
   res.json({ ok: true, ...stan });
+});
+
+// Regula 7: przeniesienie FAST-TRACK -> STANDARD na M5 (szeroki przetarg bez intencji kontynuacji).
+// M1-M4 STANDARD auto-potwierdzone (klient przeszedl kwalifikacje w fast-tracku), historia i ID zachowane.
+api.post('/tematy/:id/przenies-standard', (req, res) => {
+  const { powod } = req.body;
+  const t = db.prepare(`SELECT t.*, kr.kod AS pipeline_kod, km.kod AS kamien_kod
+    FROM tematy t LEFT JOIN karty_ratingu kr ON kr.id = t.karta_id LEFT JOIN kamienie_karty km ON km.id = t.kamien_id
+    WHERE t.id = ?`).get(req.params.id);
+  if (!t) return res.status(404).json({ error: 'Nie znaleziono tematu' });
+  if (t.pipeline_kod !== 'FAST_TRACK') return res.status(400).json({ error: 'Przeniesienie dotyczy tylko tematów FAST-TRACK' });
+  if (!powod) return res.status(400).json({ error: 'Podaj powód przeniesienia (np. szeroki przetarg >3 oferentów bez intencji kontynuacji)' });
+
+  const std = db.prepare(`SELECT * FROM karty_ratingu WHERE kod = 'STANDARD'`).get();
+  const kamST = db.prepare('SELECT * FROM kamienie_karty WHERE karta_id = ? ORDER BY kolejnosc').all(std.id);
+  const m5 = kamST.find(k => k.kod === 'M5');
+
+  db.exec('BEGIN');
+  try {
+    // przepnij na STANDARD, wyczysc stare potwierdzenia (dot. F-kamieni)
+    db.prepare('DELETE FROM potwierdzenia_kamieni WHERE temat_id = ?').run(t.id);
+    db.prepare('UPDATE tematy SET karta_id = ? WHERE id = ?').run(std.id, t.id);
+    // auto-potwierdz M1-M4 (kwalifikacja przeszla w fast-tracku)
+    for (const km of kamST) {
+      if (['M1', 'M2', 'M3', 'M4'].includes(km.kod)) {
+        db.prepare('INSERT INTO potwierdzenia_kamieni (temat_id, kamien_id, dowod, potwierdzajacy) VALUES (?,?,?,?)')
+          .run(t.id, km.id, `Przeniesiony z FAST-TRACK: ${powod}`, t.handlowiec || null);
+      }
+    }
+    const stan = przeliczTemat(t.id); // prefiks M4 -> aktualny M5, prawd 40%
+    db.prepare('INSERT INTO historia_tematu (temat_id, typ_zmiany, wartosc_przed, wartosc_po, opis) VALUES (?,?,?,?,?)')
+      .run(t.id, 'przeniesienie pipeline', `FAST-TRACK ${t.kamien_kod}`, `STANDARD M5`, powod);
+    db.exec('COMMIT');
+    res.json({ ok: true, ...stan });
+  } catch (err) { db.exec('ROLLBACK'); throw err; }
 });
 
 // Powody zamkniecia dla etapu (per kamien_kod)
@@ -811,7 +875,8 @@ api.post('/tematy/:id/zamknij', (req, res) => {
     .run(status, powod, opis || null, prawd, t.id);
   db.prepare('INSERT INTO historia_tematu (temat_id, typ_zmiany, wartosc_przed, wartosc_po, opis) VALUES (?,?,?,?,?)')
     .run(t.id, 'zamkniecie', t.status, status, `${powod || ''} ${opis || ''}`.trim());
-  res.json({ ok: true });
+  const f1 = status === 'wygrany' ? utworzF1Watch(t) : null;
+  res.json({ ok: true, f1_watch: f1 });
 });
 
 api.post('/tematy/:id/otworz', (req, res) => {

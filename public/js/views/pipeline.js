@@ -76,6 +76,8 @@ export async function widokTemat(kontener, id) {
           `${t.klient_nazwa || ''} · ${t.karta_nazwa} · kamień ${t.kamien_kod || ''}: ${t.kamien_nazwa} · prawdopodobieństwo wygranej ${t.prawdopodobienstwo}%`)),
       el('div', { style: 'display:flex; gap:8px; flex-wrap:wrap;' },
         el('button', { class: 'btn', onclick: () => formularzTematu(t, sl, odswiez) }, 'Edytuj dane'),
+        otwarty && t.pipeline_kod === 'FAST_TRACK' && t.kamien_kod === 'F2'
+          ? el('button', { class: 'btn', onclick: () => przeniesStandard(t, odswiez) }, '↦ Przenieś do STANDARD (M5)') : '',
         otwarty ? el('button', { class: 'btn btn-czerwony', onclick: () => zamknijTemat(t, odswiez) }, 'Zamknij temat') :
           el('button', { class: 'btn', onclick: async () => { await POST(`/tematy/${id}/otworz`); toast('Temat otwarty ponownie'); odswiez(); } }, 'Otwórz ponownie'))),
 
@@ -184,7 +186,7 @@ function potwierdzKamien(t, km, odswiez) {
     [['Potwierdź kamień', 'btn-zielony', async () => {
       if (!dowod.value.trim()) { toast('Dowód jest wymagany', true); return false; }
       const r = await POST(`/tematy/${t.id}/potwierdz-kamien`, { kamien_id: km.id, dowod: dowod.value, potwierdzajacy: kto.value || null });
-      toast(`${km.kod} potwierdzony → ${r.prawdopodobienstwo}%`); odswiez();
+      toast(r.f1_watch ? `Wygrana! F1-watch ${r.f1_watch.identyfikator} — przegląd za 6 mc` : `${km.kod} potwierdzony → ${r.prawdopodobienstwo}%`); odswiez();
     }]]);
 }
 
@@ -252,9 +254,23 @@ async function zamknijTemat(t, poZapisie) {
   modal('Zamknięcie tematu ' + t.identyfikator, form, [['Zamknij temat', 'btn-glowny', async () => {
     const d = zbierzForm(form);
     const r = await POST(`/tematy/${t.id}/zamknij`, d);
-    toast(r.recycled ? `Temat w recyklingu — powrót ${r.recycle_date}` : 'Temat zamknięty: ' + d.status);
+    if (r.recycled) toast(`Temat w recyklingu — powrót ${r.recycle_date}`);
+    else if (r.f1_watch) toast(`Wygrana! Utworzono F1-watch ${r.f1_watch.identyfikator} — przegląd konta za 6 mc`);
+    else toast('Temat zamknięty: ' + d.status);
     poZapisie?.();
   }]]);
+}
+
+function przeniesStandard(t, poZapisie) {
+  const powod = el('textarea', { placeholder: 'np. klient ogłosił szeroki przetarg (>3 oferentów) bez deklaracji kontynuacji' });
+  modal('Przenieś do pipeline STANDARD (M5)', el('div', {},
+    el('div', { class: 'info-box' }, 'Temat trafi na kamień M5 STANDARD z zachowaniem ID i historii. M1–M4 zostaną auto-potwierdzone (klient przeszedł kwalifikację w fast-tracku).'),
+    el('div', { class: 'pole' }, el('label', {}, 'Powód przeniesienia *'), powod)),
+    [['Przenieś', 'btn-glowny', async () => {
+      if (!powod.value.trim()) { toast('Powód jest wymagany', true); return false; }
+      const r = await POST(`/tematy/${t.id}/przenies-standard`, { powod: powod.value });
+      toast(`Przeniesiony do STANDARD M5 → ${r.prawdopodobienstwo}%`); poZapisie?.();
+    }]]);
 }
 
 function aktualizujStatusE2e(t, sl, poZapisie) {
