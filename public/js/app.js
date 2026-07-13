@@ -1,5 +1,7 @@
 // Router aplikacji WPIP CRM
 import { widokPulpit } from './views/dashboard.js';
+import { widokRoadmapa } from './views/roadmapa.js';
+import { widokRecykling } from './views/recykling.js';
 import { widokLeady, widokLead } from './views/leady.js';
 import { widokImport } from './views/import.js';
 import { widokScoring } from './views/scoring.js';
@@ -15,7 +17,9 @@ import { toast } from './ui.js';
 
 // Widok dostaje (kontener, ...grupy regex, query string)
 const trasy = [
-  [/^\/$/, widokPulpit],
+  [/^\/$/, widokRoadmapa],
+  [/^\/pulpit$/, widokPulpit],
+  [/^\/recykling$/, widokRecykling],
   [/^\/leady$/, widokLeady],
   [/^\/leady\/(\d+)$/, widokLead],
   [/^\/import$/, widokImport],

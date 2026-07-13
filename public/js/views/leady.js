@@ -129,6 +129,7 @@ export async function widokLead(kontener, id) {
         el('p', { class: 'podtytul' },
           `ID tematu: ${lead.identyfikator || '—'} · grupa: ${lead.grupa_nazwa || '—'} · scoring ${lead.score_total} pkt · % kwalifikacji: ${lead.prawd_kwalifikacji}%`)),
       el('div', { style: 'display:flex; gap:8px; flex-wrap:wrap' },
+        aktywny && !lead.temat_id ? el('button', { class: 'btn btn-glowny', onclick: () => uruchomTemat(lead, odswiez) }, '🚀 Uruchom temat (M1)') : '',
         aktywny && !lead.fast_track ? el('button', { class: 'btn', onclick: () => fastTrack(lead, odswiez) }, '⏫ Fast-track') : '',
         aktywny ? el('button', { class: 'btn', onclick: () => zmienStatus(lead, 'uspiony', sl, odswiez) }, 'Uśpij') : '',
         aktywny ? el('button', { class: 'btn btn-czerwony', onclick: () => zmienStatus(lead, 'odpuszczony', sl, odswiez) }, 'Odpuść') : '',
@@ -156,8 +157,8 @@ export async function widokLead(kontener, id) {
             } catch (err) { toast(err.message, true); }
           }
         }, `${i + 1}. ${k}`))),
-      lead.kamien === 'Zakwalifikowany' && !lead.temat_id
-        ? el('a', { class: 'btn btn-glowny', href: '#/komitet', style: 'margin-top:8px' }, 'Otwórz kolejkę Komitetu →') : ''),
+      aktywny && !lead.temat_id && aktIdx >= 2
+        ? el('div', { class: 'info-box', style: 'margin-top:8px' }, 'Lead po researchu — użyj „🚀 Uruchom temat", by wprowadzić go dalej w pipeline persony (M1→WYGRANA). Komitet to kamień M5 wewnątrz tematu.') : ''),
 
     // ---- Kwalifikacja wstepna ----
     sekcjaKwalifikacji(lead, sl, odswiez),
@@ -330,6 +331,21 @@ export function badgeDecyzja(d) {
   const mapa = { bid: ['BID — ofertujemy', 'zielony'], no_bid: ['NO BID — odpuszczamy', 'czerwony'], defer: ['DEFER — dopytujemy', 'zolty'] };
   const [t, k] = mapa[d] || [d, 'szary'];
   return el('span', { class: 'badge badge-' + k }, t);
+}
+
+async function uruchomTemat(lead, odswiez) {
+  const powracajacy = /powracaj/i.test(lead.proces_researchu || '');
+  const wybor = el('select', {},
+    el('option', { value: '', selected: !powracajacy }, 'STANDARD — nowy klient (M1–M8)'),
+    el('option', { value: 'FAST_TRACK', selected: powracajacy }, 'FAST-TRACK — klient powracający (F1–F4)'));
+  modal('Uruchom temat w pipeline', el('div', {},
+    el('div', { class: 'info-box' }, 'Lead staje się tematem wchodzącym na kamień M1 wybranego pipeline persony. Dalej prowadzisz go przez potwierdzanie kamieni-faktów. Komitet Ofertowy to kamień M5/F3 wewnątrz ścieżki.'),
+    el('div', { class: 'pole' }, el('label', {}, 'Pipeline persony'), wybor)),
+    [['Uruchom temat', 'btn-glowny', async () => {
+      const r = await POST(`/leady/${lead.id}/uruchom-temat`, { pipeline_kod: wybor.value || 'STANDARD' });
+      toast(`Temat ${r.identyfikator} uruchomiony na M1`);
+      location.hash = '#/tematy/' + r.id;
+    }]]);
 }
 
 function fastTrack(lead, odswiez) {

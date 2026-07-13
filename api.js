@@ -539,17 +539,21 @@ api.post('/leady/:id/uruchom-temat', (req, res) => {
   res.json({ id: tematId, identyfikator, pipeline: karta.nazwa });
 });
 
-// ---------- KOMITET OFERTOWY ----------
+// ---------- KOMITET OFERTOWY (kamien M5/F3 wewnatrz tematu) ----------
+// Kolejka = tematy na kamieniu M5 (STANDARD) / F3 (FAST-TRACK) czekajace na decyzje BID/NO-BID.
+// BID = potwierdzenie kamienia M5/F3 (przez /tematy/:id/potwierdz-kamien).
+// NO-BID = zamkniecie tematu z powodem (przez /tematy/:id/zamknij).
 api.get('/komitet/kolejka', (req, res) => {
   res.json(db.prepare(`
-    SELECT l.*, k.nazwa AS klient_nazwa, i.nazwa AS inwestycja_nazwa, i.wartosc_inwestycji,
-      g.nazwa AS grupa_nazwa
-    FROM leady l
-    LEFT JOIN klienci k ON k.id = l.klient_id
-    LEFT JOIN inwestycje i ON i.id = l.inwestycja_id
-    LEFT JOIN grupy_leadow g ON g.id = l.grupa_id
-    WHERE l.kamien = 'Zakwalifikowany' AND l.status = 'aktywny' AND l.temat_id IS NULL
-    ORDER BY l.score_total DESC`).all());
+    SELECT t.*, k.nazwa AS klient_nazwa, km.kod AS kamien_kod, km.id AS akt_kamien_id,
+      km.definicja_spelnienia, kr.kod AS pipeline_kod, i.wartosc_inwestycji
+    FROM tematy t
+    LEFT JOIN klienci k ON k.id = t.klient_id
+    LEFT JOIN kamienie_karty km ON km.id = t.kamien_id
+    LEFT JOIN karty_ratingu kr ON kr.id = t.karta_id
+    LEFT JOIN inwestycje i ON i.id = t.inwestycja_id
+    WHERE t.status = 'otwarty' AND km.kod IN ('M5', 'F3')
+    ORDER BY t.wartosc_kontraktu DESC`).all());
 });
 api.get('/komitet/decyzje', (req, res) => {
   res.json(db.prepare(`
@@ -820,7 +824,7 @@ api.post('/tematy/:id/otworz', (req, res) => {
 
 // ---------- DZIALANIA (outcome-driven) ----------
 const DZIALANIE_POLA = ['typ', 'cel', 'opis', 'lead_id', 'temat_id', 'klient_id', 'osoba_id',
-  'kamien_id', 'termin', 'status', 'notatki'];
+  'kamien_id', 'termin', 'status', 'notatki', 'template_id'];
 
 api.get('/dzialania', (req, res) => {
   const { zakres } = req.query;
@@ -847,6 +851,8 @@ api.put('/dzialania/:id', (req, res) => {
   res.json({ ok: true });
 });
 
+// Wynik dzialania (v2): zapis efektu osiagniety/nieosiagniety + podpowiedz "co dalej" z szablonu.
+// Prawdopodobienstwo NIE zmienia sie z dzialan - w v2 pcha je wylacznie potwierdzenie kamienia.
 api.post('/dzialania/:id/wynik', (req, res) => {
   const { wynik } = req.body;
   const d = db.prepare('SELECT * FROM dzialania WHERE id = ?').get(req.params.id);
@@ -856,25 +862,66 @@ api.post('/dzialania/:id/wynik', (req, res) => {
     .get('wynik_dzialania', wynik);
   if (!slownik) return res.status(400).json({ error: 'Nieznany wynik dzialania (sprawdz slownik)' });
 
-  let deltaZastosowana = 0;
-  if (d.temat_id) {
-    const t = db.prepare(`SELECT t.*, km.prawd_min, km.prawd_max FROM tematy t
-      LEFT JOIN kamienie_karty km ON km.id = t.kamien_id WHERE t.id = ?`).get(d.temat_id);
-    if (t && t.status === 'otwarty') {
-      const delta = slownik.delta || 0;
-      const nowe = Math.max(t.prawd_min, Math.min(t.prawd_max, t.prawdopodobienstwo + delta));
-      deltaZastosowana = nowe - t.prawdopodobienstwo;
-      if (deltaZastosowana !== 0) {
-        db.prepare('UPDATE tematy SET prawdopodobienstwo = ? WHERE id = ?').run(nowe, t.id);
-        db.prepare('INSERT INTO historia_tematu (temat_id, typ_zmiany, wartosc_przed, wartosc_po, opis) VALUES (?,?,?,?,?)')
-          .run(t.id, 'wynik dzialania', `${t.prawdopodobienstwo}%`, `${nowe}%`,
-            `Dzialanie "${d.cel}" - wynik: ${wynik} (delta ${delta > 0 ? '+' : ''}${delta})`);
-      }
-    }
+  db.prepare('UPDATE dzialania SET wynik = ?, status = ? WHERE id = ?').run(wynik, 'wykonane', d.id);
+
+  // Podpowiedz kolejnego kroku z biblioteki (sukces vs porazka)
+  let coDalej = null;
+  if (d.template_id) {
+    const tpl = db.prepare('SELECT co_dalej_sukces, co_dalej_porazka FROM task_szablony WHERE id = ?').get(d.template_id);
+    coDalej = /osi[ąa]gni[ęe]ty|cz[ęe][śs]ciowo/i.test(wynik) ? tpl?.co_dalej_sukces : tpl?.co_dalej_porazka;
   }
-  db.prepare('UPDATE dzialania SET wynik = ?, delta_zastosowana = ?, status = ? WHERE id = ?')
-    .run(wynik, deltaZastosowana, 'wykonane', d.id);
-  res.json({ ok: true, delta_zastosowana: deltaZastosowana });
+  res.json({ ok: true, co_dalej: coDalej || null });
+});
+
+// ---------- ROADMAPA TYGODNIA + PULPIT POSTEPOW (widok startowy) ----------
+api.get('/roadmapa', (req, res) => {
+  sprawdzRecykling();
+  const tematyOtwarte = db.prepare(`
+    SELECT t.*, k.nazwa AS klient_nazwa, km.kod AS kamien_kod, km.nazwa AS kamien_nazwa,
+      km.prog_zastygniecia_dni, kr.nazwa AS pipeline_nazwa, kr.kod AS pipeline_kod
+    FROM tematy t LEFT JOIN klienci k ON k.id = t.klient_id
+    LEFT JOIN kamienie_karty km ON km.id = t.kamien_id
+    LEFT JOIN karty_ratingu kr ON kr.id = t.karta_id
+    WHERE t.status = 'otwarty'`).all();
+  for (const t of tematyOtwarte) { t.dni_w_etapie = dniWEtapie(t); t.zastygly = czyZastygly(t); }
+
+  // Zadania tygodnia (temat + lead) z podpowiedzia efektu i "co dalej" z szablonu
+  const zadania = db.prepare(`
+    SELECT d.*, t.identyfikator AS temat_identyfikator, t.id AS t_id, km.kod AS kamien_kod,
+      l.nazwa AS lead_nazwa, k.nazwa AS klient_nazwa,
+      ts.oczekiwany_efekt, ts.co_dalej_sukces, ts.co_dalej_porazka
+    FROM dzialania d
+    LEFT JOIN tematy t ON t.id = d.temat_id
+    LEFT JOIN leady l ON l.id = d.lead_id
+    LEFT JOIN klienci k ON k.id = COALESCE(d.klient_id, t.klient_id, l.klient_id)
+    LEFT JOIN kamienie_karty km ON km.id = d.kamien_id
+    LEFT JOIN task_szablony ts ON ts.id = d.template_id
+    WHERE d.status = 'planowane' AND (d.termin IS NULL OR d.termin <= date('now', '+7 days'))
+    ORDER BY d.termin IS NULL, d.termin`).all();
+
+  // Tematy bez otwartego zadania (regula "zawsze nastepny krok")
+  const bezRuchu = tematyOtwarte.filter(t =>
+    !db.prepare(`SELECT 1 FROM dzialania WHERE temat_id = ? AND status = 'planowane' LIMIT 1`).get(t.id));
+
+  const zastygle = tematyOtwarte.filter(t => t.zastygly);
+  const wartoscWazona = tematyOtwarte.reduce((s, t) => s + (t.wartosc_kontraktu || 0) * (t.prawdopodobienstwo || 0) / 100, 0);
+
+  // Postep wg kamienia (kod) per pipeline
+  const wgKamienia = {};
+  for (const t of tematyOtwarte) {
+    const key = `${t.pipeline_kod || '?'}|${t.kamien_kod || '?'}`;
+    wgKamienia[key] = (wgKamienia[key] || 0) + 1;
+  }
+  const recyklingDue = db.prepare(`SELECT COUNT(*) c FROM tematy WHERE status = 'recycled'`).get().c;
+
+  res.json({
+    zadania, bez_ruchu: bezRuchu, zastygle,
+    postep: {
+      tematy_otwarte: tematyOtwarte.length, wartosc_wazona: wartoscWazona,
+      liczba_zastygle: zastygle.length, liczba_bez_ruchu: bezRuchu.length,
+      wg_kamienia: wgKamienia, recykling: recyklingDue,
+    },
+  });
 });
 
 // ---------- INWESTYCJE ----------
