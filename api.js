@@ -1,6 +1,9 @@
 // API WPIP CRM - wszystkie trasy REST
 import { Router } from 'express';
-import { db, KOMPONENTY, NAZWY_KOMPONENTOW } from './db.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { db, DATA_DIR, KOMPONENTY, NAZWY_KOMPONENTOW } from './db.js';
+import { seedDemo } from './demo-seed.js';
 import { parsujPlik, przygotujImport } from './import-ki.js';
 import { parsujPipeline } from './import-pipeline.js';
 import { policzScore, przeliczLeada, opcjeWersji, zamrozWersje, logujLeada } from './scoring.js';
@@ -1729,6 +1732,41 @@ api.post('/import/pipeline/wykonaj', (req, res) => {
     db.exec('COMMIT');
   } catch (err) { db.exec('ROLLBACK'); throw err; }
   res.json(stat);
+});
+
+// ---------- DANE DEMO (prezentacja) ----------
+const SCIEZKA_BACKUP = path.join(DATA_DIR, 'wpip-crm.przed-demo.sqlite');
+
+api.get('/demo/status', (req, res) => {
+  const flaga = db.prepare(`SELECT wartosc FROM konfiguracja WHERE klucz = 'demo_seed'`).get();
+  res.json({ demo_zaladowane: !!flaga, data_zaladowania: flaga?.wartosc || null, backup_istnieje: fs.existsSync(SCIEZKA_BACKUP) });
+});
+
+// Zaladowanie danych demo: najpierw bezpieczny backup (VACUUM INTO), potem seed
+api.post('/demo/seed', (req, res) => {
+  if (!fs.existsSync(SCIEZKA_BACKUP)) {
+    db.exec(`VACUUM INTO '${SCIEZKA_BACKUP.replace(/'/g, "''")}'`);
+  }
+  db.exec('BEGIN');
+  try {
+    const raport = seedDemo(db);
+    db.exec('COMMIT');
+    res.json({ ok: true, raport });
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+});
+
+// Przywrocenie stanu sprzed demo: plik .restore + restart procesu (db.js podmienia przy starcie)
+api.post('/demo/przywroc', (req, res) => {
+  if (!fs.existsSync(SCIEZKA_BACKUP)) {
+    return res.status(400).json({ error: 'Brak backupu sprzed demo — nie ma czego przywracać.' });
+  }
+  fs.copyFileSync(SCIEZKA_BACKUP, path.join(DATA_DIR, 'wpip-crm.restore.sqlite'));
+  res.json({ ok: true, restart: true });
+  // exit(1) -> Railway restartuje serwis; przy starcie db.js podmieni baze
+  setTimeout(() => process.exit(1), 400);
 });
 
 // ---------- DASHBOARD ----------

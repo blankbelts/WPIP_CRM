@@ -7,10 +7,20 @@ import { seedPipeline } from './seed-pipeline.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Na Railway ustaw DATA_DIR na sciezke wolumenu (np. /data), inaczej baza znika przy deployu
-const DATA_DIR = process.env.DATA_DIR || __dirname;
+export const DATA_DIR = process.env.DATA_DIR || __dirname;
 fs.mkdirSync(DATA_DIR, { recursive: true });
-console.log('Baza danych:', path.join(DATA_DIR, 'wpip-crm.sqlite'));
-export const db = new DatabaseSync(path.join(DATA_DIR, 'wpip-crm.sqlite'));
+
+// Przywracanie bazy sprzed demo: jesli czeka plik .restore, podmien baze PRZED otwarciem
+const SCIEZKA_BAZY = path.join(DATA_DIR, 'wpip-crm.sqlite');
+const SCIEZKA_RESTORE = path.join(DATA_DIR, 'wpip-crm.restore.sqlite');
+if (fs.existsSync(SCIEZKA_RESTORE)) {
+  for (const suf of ['', '-wal', '-shm']) { try { fs.rmSync(SCIEZKA_BAZY + suf); } catch {} }
+  fs.renameSync(SCIEZKA_RESTORE, SCIEZKA_BAZY);
+  console.log('Przywrócono bazę sprzed danych demo.');
+}
+
+console.log('Baza danych:', SCIEZKA_BAZY);
+export const db = new DatabaseSync(SCIEZKA_BAZY);
 
 db.exec(`PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;`);
 

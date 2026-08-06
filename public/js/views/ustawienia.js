@@ -23,7 +23,8 @@ const NAZWY_SLOWNIKOW = {
 };
 
 export async function widokUstawienia(kontener) {
-  const [listaKart, slowniki, pytania] = await Promise.all([karty(true), GET('/slowniki'), GET('/pytania-kwalifikacji')]);
+  const [listaKart, slowniki, pytania, demo] = await Promise.all([
+    karty(true), GET('/slowniki'), GET('/pytania-kwalifikacji'), GET('/demo/status')]);
 
   kontener.append(
     el('h1', {}, 'Ustawienia'),
@@ -49,6 +50,36 @@ export async function widokUstawienia(kontener) {
             }, 'Zmień hasło')));
         return form;
       })()),
+
+    // Dane demo (prezentacja)
+    el('div', { class: 'karta-box' },
+      el('h2', { style: 'margin-top:0' }, 'Dane demo (prezentacja)'),
+      el('div', { class: 'info-box' },
+        'Rozgrzewa procesy na zaimportowanych danych: ~40 historycznych tematów z pomierzonymi konwersjami i medianami czasu, leady rozłożone w lejku, cele w realizacji, fast-track, recykling. Przed załadowaniem robiony jest automatyczny backup — przywrócenie cofa wszystko jednym kliknięciem (restart ~15 s).'),
+      el('div', { style: 'display:flex; gap:10px; align-items:center; flex-wrap:wrap' },
+        demo.demo_zaladowane
+          ? el('span', { class: 'badge badge-zolty' }, 'Demo załadowane ' + (demo.data_zaladowania || '').slice(0, 10))
+          : el('span', { class: 'badge badge-szary' }, 'Demo niezaładowane'),
+        !demo.demo_zaladowane ? el('button', {
+          class: 'btn btn-glowny', onclick: async (e) => {
+            e.target.disabled = true;
+            try {
+              const r = await POST('/demo/seed', {});
+              toast('Demo załadowane: ' + r.raport.join(' · '));
+              setTimeout(() => location.reload(), 1200);
+            } catch (err) { toast(err.message, true); e.target.disabled = false; }
+          }
+        }, 'Załaduj dane demo') : '',
+        demo.demo_zaladowane && demo.backup_istnieje ? el('button', {
+          class: 'btn btn-czerwony', onclick: () => {
+            modal('Przywrócenie stanu sprzed demo', el('p', {},
+              'Baza wróci do stanu sprzed załadowania demo (wszystkie zmiany od tego momentu przepadną). Aplikacja zrestartuje się — odśwież stronę po ~15 sekundach.'),
+              [['Przywróć i zrestartuj', 'btn-czerwony', async () => {
+                await POST('/demo/przywroc', {});
+                document.body.innerHTML = '<div style="display:flex;height:100vh;align-items:center;justify-content:center;font-family:sans-serif;color:#4e4e50">Przywracanie bazy… odśwież stronę za ok. 15 sekund.</div>';
+              }]]);
+          }
+        }, 'Przywróć stan sprzed demo') : '')),
 
     // Pytania kwalifikacji wstepnej
     el('div', { class: 'karta-box' },

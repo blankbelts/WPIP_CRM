@@ -1,10 +1,14 @@
 // DEMO PREZENTACYJNE: rozgrzewa procesy na zaimportowanych danych (leady KI + tematy z arkusza).
-// Uruchomienie: node demo-prezentacja.js (przy WYLACZONYM serwerze).
-// Cofniecie: przywroc backup wpip-crm.przed-demo.sqlite (kopiowany przed seedem).
-import { DatabaseSync } from 'node:sqlite';
+// Modul: seedDemo(db) - wolany z API (POST /api/demo/seed) albo z CLI: node demo-seed.js
+// Deterministyczny (ziarno 42). Cofniecie: backup robiony przed seedem (POST /api/demo/przywroc).
+export function seedDemo(db) {
+  db.exec('PRAGMA foreign_keys = ON');
 
-const db = new DatabaseSync('./wpip-crm.sqlite');
-db.exec('PRAGMA foreign_keys = ON');
+  // Warunki wstepne: musza istniec pipeline'y v2 i zaimportowani klienci
+  const jestFlag = db.prepare(`SELECT 1 FROM konfiguracja WHERE klucz = 'demo_seed'`).get();
+  if (jestFlag) throw new Error('Dane demo już załadowane — najpierw „Przywróć stan sprzed demo".');
+  const iluKlientow = db.prepare('SELECT COUNT(*) c FROM klienci').get().c;
+  if (iluKlientow < 5) throw new Error('Za mało klientów w bazie (min. 5) — najpierw zaimportuj leady (KI) i/lub pipeline z arkusza.');
 
 // Deterministyczny pseudo-random (powtarzalne demo)
 let ziarno = 42;
@@ -18,7 +22,7 @@ const dniTemu = (n) => {
 };
 const dataTemu = (n) => dniTemu(n).slice(0, 10);
 
-console.log('== DEMO SEED start ==');
+const raport = [];
 
 // ---------- 0. Slowniki pomocnicze ----------
 const std = db.prepare(`SELECT * FROM karty_ratingu WHERE kod = 'STANDARD'`).get();
@@ -113,7 +117,7 @@ for (const [wynik, dokadIdx] of PLAN_HISTORII) {
       dataTemu(dZ - calk(1, 5)), sukces ? 'Osiągnięty' : los(['Nieosiągnięty', 'Zwłoka']), 'wykonane', dniTemu(dZ), null);
   }
 }
-console.log('1. Historyczne tematy demo:', PLAN_HISTORII.length);
+raport.push('Historyczne tematy demo: ' + PLAN_HISTORII.length);
 
 // ---------- 2. Otwarte tematy (14 realnych + testowe): urealnij daty i checklisty ----------
 const otwarte = db.prepare(`SELECT t.*, km.kolejnosc AS akt_kolejnosc FROM tematy t
@@ -154,7 +158,7 @@ for (const t of otwarte) {
       .run(t.id, kr.id, t.handlowiec, dniTemu(calk(0, wAktualnym)));
   }
 }
-console.log('2. Otwarte tematy urealnione:', otwarte.length);
+raport.push('Otwarte tematy urealnione: ' + otwarte.length);
 
 // ---------- 3. Zadania na ten tydzien (roadmapa zyje) ----------
 const szablonyWg = {};
@@ -171,7 +175,7 @@ for (const t of otwarte.slice(0, 12)) {
     .run(s.typ, s.nazwa, t.id, t.klient_id, t.kamien_id, s.id, dataTemu(-calk(0, 5)));
   zadanTydzien++;
 }
-console.log('3. Zadania tygodnia:', zadanTydzien);
+raport.push('Zadania tygodnia: ' + zadanTydzien);
 
 // ---------- 4. Leady KI: rozklad lejka prospectingowego ----------
 const leadyAkt = db.prepare(`SELECT id, priorytet, dyskwalifikacja_x FROM leady WHERE status = 'aktywny'`).all();
@@ -200,7 +204,7 @@ for (const l of leadyAkt) {
   }
   if (rnd() < 0.3) db.prepare('UPDATE leady SET handlowiec = ? WHERE id = ?').run('P. Kowalski', l.id);
 }
-console.log('4. Leady rozlozone w lejku:', leadyAkt.length);
+raport.push('Leady rozłożone w lejku: ' + leadyAkt.length);
 
 // ---------- 5. Fast-track: 3 tematy klientow powracajacych ----------
 const powracajacy = klienci.slice(0, 3);
@@ -235,7 +239,7 @@ klienci.slice(3, 9).forEach((k, idx) => {
   db.prepare('UPDATE klienci SET klient_powracajacy = 1, data_nastepnego_przegladu = ? WHERE id = ?')
     .run(idx < 2 ? dataTemu(calk(5, 30)) : dataTemu(-calk(10, 90)), k.id);
 });
-console.log('5. Fast-track + AM gotowe');
+raport.push('Fast-track + konta AM gotowe');
 
 // ---------- 6. Decyzje komitetu (historia bramki) ----------
 for (let d = 0; d < 32; d++) {
@@ -260,6 +264,21 @@ wygraneDemo.forEach((t, idx) => {
   db.prepare(`UPDATE potwierdzenia_kamieni SET data = ? WHERE temat_id = ? AND kamien_id = ?`)
     .run(dniTemu(calk(30, 55)), t.id, m5.id);
 });
-console.log('6-7. Komitet + cele gotowe');
+raport.push('Decyzje Komitetu + cele gotowe');
 
-console.log('== DEMO SEED done ==');
+// ---------- 8. Drugi handlowiec dostaje czesc otwartego pipeline ----------
+const otwartePK = db.prepare(`SELECT id FROM tematy WHERE status = 'otwarty' ORDER BY id DESC LIMIT 4`).all();
+for (const t of otwartePK) db.prepare(`UPDATE tematy SET handlowiec = 'P. Kowalski' WHERE id = ?`).run(t.id);
+
+  // Flaga: demo zaladowane (blokuje ponowny seed do czasu przywrocenia)
+  db.prepare(`INSERT OR REPLACE INTO konfiguracja (klucz, wartosc) VALUES ('demo_seed', ?)`)
+    .run(new Date().toISOString());
+  return raport;
+}
+
+// Wejscie CLI: node demo-seed.js (przy wylaczonym serwerze)
+if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}`) {
+  const { DatabaseSync } = await import('node:sqlite');
+  const db = new DatabaseSync('./wpip-crm.sqlite');
+  console.log(seedDemo(db).join('\n'));
+}
