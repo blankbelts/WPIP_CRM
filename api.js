@@ -1239,7 +1239,7 @@ api.post('/import/wykonaj', (req, res) => {
 
       const istniejacyLead = znajdzLead.get(inw.id);
       if (istniejacyLead) {
-        // Wystapienie w kolejnej grupie: adnotacja + aktualizacja danych inwestycji + ew. przeliczenie
+        // Wystapienie w kolejnej grupie: adnotacja + aktualizacja danych + WZBOGACENIE researchem
         stat.wystapienia++;
         wstawWystapienie.run(istniejacyLead.id, grupa_id, `Wystąpił w imporcie do grupy "${grupa.nazwa}"`);
 
@@ -1248,37 +1248,71 @@ api.post('/import/wykonaj', (req, res) => {
         const kosztNowy = Number(p.koszt) || null;
         if (kosztNowy && kosztNowy !== inw.wartosc_inwestycji) zmiany.push(['wartosc_inwestycji', inw.wartosc_inwestycji, kosztNowy]);
 
+        const wybory = JSON.parse(istniejacyLead.wybory || '{}');
+        let wyboryZmienione = false;
         if (zmiany.length) {
           stat.aktualizacje_danych++;
           for (const [pole, , po] of zmiany) {
             db.prepare(`UPDATE inwestycje SET ${pole} = ? WHERE id = ?`).run(po, inw.id);
           }
-          // Aktualizacja wyborow B/D wynikajacych z danych + przeliczenie wersja LEADA (nie grupy importu)
-          const wybory = JSON.parse(istniejacyLead.wybory || '{}');
-          if (p.wybory.B) wybory.B = p.wybory.B;
-          if (p.wybory.D) wybory.D = p.wybory.D;
-          db.prepare('UPDATE leady SET wybory = ? WHERE id = ?').run(JSON.stringify(wybory), istniejacyLead.id);
+          if (p.wybory.B) { wybory.B = p.wybory.B; wyboryZmienione = true; }
+          if (p.wybory.D) { wybory.D = p.wybory.D; wyboryZmienione = true; }
           logujLeada(istniejacyLead.id, 'aktualizacja z importu',
             zmiany.map(z => `${z[0]}: ${z[1] ?? '—'}`).join(', '),
             zmiany.map(z => `${z[0]}: ${z[2]}`).join(', '),
             `Świeże dane z importu do grupy "${grupa.nazwa}"`);
+        }
+        // Jawne dane researchu z arkusza nadpisuja heurystyki na istniejacym leadzie
+        if (p.jawne?.e3 && wybory.E3 !== p.wybory.E3) { wybory.E3 = p.wybory.E3; wyboryZmienione = true; }
+        if (p.jawne?.f && wybory.F !== p.wybory.F) { wybory.F = p.wybory.F; wyboryZmienione = true; }
+        if (p.klasyfikacja && p.wybory.C && wybory.C !== p.wybory.C) { wybory.C = p.wybory.C; wyboryZmienione = true; }
+        if (p.branza && p.wybory.E2 && wybory.E2 !== p.wybory.E2) { wybory.E2 = p.wybory.E2; wyboryZmienione = true; }
+        if (wyboryZmienione) {
+          db.prepare('UPDATE leady SET wybory = ? WHERE id = ?').run(JSON.stringify(wybory), istniejacyLead.id);
           if (istniejacyLead.wersja_id) {
-            const wynik = przeliczLeada(istniejacyLead.id, istniejacyLead.wersja_id, 'Aktualizacja danych z importu');
+            const wynik = przeliczLeada(istniejacyLead.id, istniejacyLead.wersja_id, 'Wzbogacenie researchem z importu');
             if (wynik.priorytet !== istniejacyLead.priorytet) stat.zmiany_priorytetu++;
           }
+        }
+        if (p.jawne?.research) {
+          const mapaR = { 'ZIELONE': 'ZIELONY', 'ŻÓŁTE': 'ŻÓŁTY', 'CZERWONE': 'CZERWONY' };
+          const nowyR = mapaR[p.status_researchu_arkusz];
+          if (nowyR && istniejacyLead.status_researchu !== nowyR) {
+            db.prepare('UPDATE leady SET status_researchu = ?, research_notatka = COALESCE(?, research_notatka) WHERE id = ?')
+              .run(nowyR, p.research_notatka || null, istniejacyLead.id);
+            logujLeada(istniejacyLead.id, 'research', istniejacyLead.status_researchu, nowyR, 'Research z arkusza importu');
+          }
+        }
+        // NIP/kontakt firmy inwestora na kliencie (gdy brak)
+        if (p.firma && istniejacyLead.klient_id) {
+          db.prepare(`UPDATE klienci SET nip = COALESCE(nip, ?), miasto = COALESCE(miasto, ?), wojewodztwo = COALESCE(wojewodztwo, ?) WHERE id = ?`)
+            .run(p.firma.nip, p.firma.miasto, p.firma.wojewodztwo, istniejacyLead.klient_id);
         }
         continue;
       }
 
-      // Klient (dedup po nazwie)
+      // Klient (dedup po nazwie) + dane firmy inwestora (NIP, kontakt) z zakladki Firmy
       let klientId = null;
       if (p.klient_nazwa) {
         const istKlient = znajdzKlienta.get(p.klient_nazwa);
-        if (istKlient) klientId = istKlient.id;
-        else {
-          klientId = Number(wstawKlienta.run(
-            p.klient_nazwa, zrodloWpisu, p.branza || null, p.miasto || null, p.wojewodztwo || null,
-            p.inwestor && p.inwestor !== p.klient_nazwa ? 'Pełne pole Inwestor z importu: ' + p.inwestor : null).lastInsertRowid);
+        if (istKlient) {
+          klientId = istKlient.id;
+          if (p.firma) {
+            db.prepare(`UPDATE klienci SET nip = COALESCE(nip, ?), miasto = COALESCE(miasto, ?), wojewodztwo = COALESCE(wojewodztwo, ?) WHERE id = ?`)
+              .run(p.firma.nip, p.firma.miasto, p.firma.wojewodztwo, klientId);
+          }
+        } else {
+          const notatkiKlienta = [
+            p.inwestor && p.inwestor !== p.klient_nazwa ? 'Pełne pole Inwestor z importu: ' + p.inwestor : null,
+            p.firma?.telefon ? 'Tel: ' + p.firma.telefon : null,
+            p.firma?.email ? 'E-mail: ' + p.firma.email : null,
+            p.firma?.www ? 'WWW: ' + p.firma.www : null,
+          ].filter(Boolean).join('\n');
+          klientId = Number(db.prepare(`INSERT INTO klienci (nazwa, nip, zrodlo_pozyskania, branza, miasto, wojewodztwo, notatki)
+            VALUES (?,?,?,?,?,?,?)`).run(
+            p.klient_nazwa, p.firma?.nip || null, zrodloWpisu, p.branza || null,
+            p.firma?.miasto || p.miasto || null, p.firma?.wojewodztwo || p.wojewodztwo || null,
+            notatkiKlienta || null).lastInsertRowid);
           stat.klienci_nowi++;
         }
       }
@@ -1299,7 +1333,7 @@ api.post('/import/wykonaj', (req, res) => {
         klientId, inw.id, grupa_id, grupa.wersja_id, handlowiec || null, zrodloWpisu, 'Lead surowy', 10,
         JSON.stringify(p.wybory), score.total, score.priorytet, score.dyskwalifikacja,
         score.powod || null, statusResearchu,
-        statusResearchu !== 'SZARY' ? 'Status researchu przeniesiony z arkusza importu' : null,
+        p.research_notatka || (statusResearchu !== 'SZARY' ? 'Status researchu przeniesiony z arkusza importu' : null),
         notatki || null, idTematu, sposob);
       logujLeada(Number(rLead.lastInsertRowid), 'utworzenie', null, `${score.total} / ${score.priorytet}`,
         `Import do grupy "${grupa.nazwa}" · ID ${idTematu}`);

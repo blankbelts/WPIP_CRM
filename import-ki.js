@@ -186,7 +186,33 @@ export function przygotujImport(bufor, zakladka) {
     scoreZewn: znajdzKolumne(nagl, 'SCORE'),
     priorytetZewn: znajdzKolumne(nagl, 'Priorytet'),
     research: znajdzKolumne(nagl, 'Status researchu', 'Status weryfikacji'),
+    researchNotatka: znajdzKolumne(nagl, 'Notatka research'),
+    bliskosc: znajdzKolumne(nagl, 'Bliskość', 'Bliskosc'),
+    rozbudowa: znajdzKolumne(nagl, 'Rozbudowa'),
   };
+
+  // Wzbogacenie z zakladki "Firmy jako udziały w inwestycji" (NIP, kontakt firmy-inwestora)
+  const firmyWg = {};
+  const arkuszFirm = wb.Sheets['Firmy jako udziały w inwestycji'];
+  if (arkuszFirm) {
+    const fr = XLSX.utils.sheet_to_json(arkuszFirm, { header: 1, defval: '' });
+    const fn = (fr[0] || []).map(normalizuj);
+    const fi = {
+      idInw: fn.indexOf('ID inwestycji'), rola: fn.indexOf('Branża'), nazwa: fn.indexOf('Nazwa firmy'),
+      woj: fn.indexOf('Woj. firmy'), miasto: fn.indexOf('Miasto firmy'),
+      email: fn.indexOf('E-mail'), www: fn.indexOf('WWW'), tel: fn.indexOf('Telefon'), nip: fn.indexOf('NIP'),
+    };
+    for (const r of fr.slice(1)) {
+      if (normalizuj(r[fi.rola]) !== 'Inwestor') continue;
+      const idI = String(normalizuj(r[fi.idInw]));
+      if (!idI || firmyWg[idI]) continue;
+      firmyWg[idI] = {
+        nazwa: normalizuj(r[fi.nazwa]), nip: normalizuj(r[fi.nip]) || null,
+        miasto: normalizuj(r[fi.miasto]) || null, wojewodztwo: normalizuj(r[fi.woj]) || null,
+        email: normalizuj(r[fi.email]) || null, telefon: normalizuj(r[fi.tel]) || null, www: normalizuj(r[fi.www]) || null,
+      };
+    }
+  }
   if (kol.nazwa < 0 && kol.inwestor < 0) {
     throw new Error('Nie rozpoznano formatu: brak kolumny "Nazwa" i "Inwestor". Nagłówki: ' + nagl.join(', '));
   }
@@ -214,10 +240,22 @@ export function przygotujImport(bufor, zakladka) {
       score_zewnetrzny: w(r, kol.scoreZewn) || null,
       priorytet_zewnetrzny: w(r, kol.priorytetZewn) || null,
       status_researchu_arkusz: w(r, kol.research) || null,
+      research_notatka: w(r, kol.researchNotatka) || null,
     };
+    dane.firma = dane.id_zrodlowe ? (firmyWg[String(dane.id_zrodlowe)] || null) : null;
+    if (dane.firma?.nazwa) dane.klient_nazwa = dane.firma.nazwa;
 
     const c = wybierzC({ klasyfikacja: dane.klasyfikacja, czyPrywatna: w(r, kol.czyPrywatna), inwestor });
     const e2 = wybierzE2({ branza: dane.branza, nazwa: dane.nazwa_inwestycji, informacje: dane.informacje });
+
+    // E3/F: jawne kolumny researchu maja pierwszenstwo nad heurystyka
+    const bliskoscJawna = w(r, kol.bliskosc);
+    const e3 = ['Miasto z realizacją WPIP', 'Powiat z realizacją WPIP', 'Brak bliskości'].includes(bliskoscJawna)
+      ? bliskoscJawna : wybierzE3(dane.miasto, w(r, kol.powiat));
+    const rozbudowaJawna = w(r, kol.rozbudowa).toLowerCase();
+    const f = rozbudowaJawna === 'tak' ? 'Rozbudowa istniejącego zakładu'
+      : rozbudowaJawna === 'nie' ? 'Nowa inwestycja'
+      : wybierzF({ nazwa: dane.nazwa_inwestycji, modernizacja: w(r, kol.modernizacja) });
 
     dane.wybory = {
       A: wybierzA(dane.podsektor),
@@ -226,10 +264,15 @@ export function przygotujImport(bufor, zakladka) {
       D: wybierzD(dane.etap),
       E1: 'Województwo objęte bazą',
       E2: e2.etykieta,
-      E3: wybierzE3(dane.miasto, w(r, kol.powiat)),
-      F: wybierzF({ nazwa: dane.nazwa_inwestycji, modernizacja: w(r, kol.modernizacja) }),
+      E3: e3,
+      F: f,
     };
-    dane.do_weryfikacji = !!(c.weryfikacja || e2.weryfikacja);
+    dane.do_weryfikacji = !!(c.weryfikacja || (e2.weryfikacja && !dane.branza));
+    dane.jawne = {
+      e3: ['Miasto z realizacją WPIP', 'Powiat z realizacją WPIP', 'Brak bliskości'].includes(bliskoscJawna),
+      f: rozbudowaJawna === 'tak' || rozbudowaJawna === 'nie',
+      research: !!dane.status_researchu_arkusz && dane.status_researchu_arkusz !== '0',
+    };
     propozycje.push(dane);
   }
   return { zakladka, naglowki: nagl, propozycje };
