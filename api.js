@@ -636,7 +636,7 @@ api.post('/komitet/decyzja', (req, res) => {
   res.json({ id: Number(r.lastInsertRowid), temat_id: tematId });
 });
 
-// ---------- KARTY RATINGU ----------
+// ---------- KARTY RATINGU / LEJKI ----------
 api.get('/karty', (req, res) => {
   const karty = db.prepare('SELECT * FROM karty_ratingu WHERE aktywna = 1').all();
   for (const k of karty) {
@@ -644,26 +644,137 @@ api.get('/karty', (req, res) => {
   }
   res.json(karty);
 });
+
+// Pelny obraz lejkow do edytora: kamienie + zadania + kryteria + powody + liczba tematow
+api.get('/lejki', (req, res) => {
+  const karty = db.prepare('SELECT * FROM karty_ratingu WHERE aktywna = 1 ORDER BY id').all();
+  for (const k of karty) {
+    k.liczba_tematow = db.prepare('SELECT COUNT(*) c FROM tematy WHERE karta_id = ?').get(k.id).c;
+    k.kamienie = db.prepare('SELECT * FROM kamienie_karty WHERE karta_id = ? ORDER BY kolejnosc').all(k.id);
+    for (const km of k.kamienie) {
+      km.zadania = db.prepare('SELECT * FROM task_szablony WHERE kamien_id = ? AND aktywny = 1 ORDER BY kolejnosc').all(km.id);
+      km.kryteria = db.prepare('SELECT * FROM kamien_kryteria WHERE kamien_id = ? AND aktywny = 1 ORDER BY kolejnosc').all(km.id);
+      km.powody = km.kod ? db.prepare('SELECT * FROM powody_zamkniecia WHERE kamien_kod = ? AND aktywny = 1').all(km.kod) : [];
+      km.liczba_tematow = db.prepare('SELECT COUNT(*) c FROM tematy WHERE kamien_id = ? AND status = ?').get(km.id, 'otwarty').c;
+    }
+  }
+  res.json(karty);
+});
+
+api.put('/karty/:id', (req, res) => {
+  updateById('karty_ratingu', req.params.id, pick(req.body, ['nazwa', 'opis', 'persona', 'kod', 'aktywna']));
+  res.json({ ok: true });
+});
+
+// Walidacja pasm kamieni lejka: rosnace, bez dziur i nakladek
+function walidujPasma(kartaId, res) {
+  const kamienie = db.prepare('SELECT * FROM kamienie_karty WHERE karta_id = ? ORDER BY kolejnosc').all(kartaId);
+  for (let i = 0; i < kamienie.length; i++) {
+    const k = kamienie[i];
+    if (k.prawd_min > k.prawd_max || k.prawd_start < k.prawd_min || k.prawd_start > k.prawd_max) {
+      res.status(400).json({ error: `Kamień ${k.kod || k.nazwa}: start musi mieścić się w paśmie min–max` });
+      return false;
+    }
+    if (i > 0 && k.prawd_min !== kamienie[i - 1].prawd_max + 1) {
+      res.status(400).json({ error: `Pasma muszą być ciągłe: ${k.kod || k.nazwa} zaczyna się od ${k.prawd_min}, a poprzedni kończy na ${kamienie[i - 1].prawd_max} (oczekiwane ${kamienie[i - 1].prawd_max + 1})` });
+      return false;
+    }
+  }
+  return true;
+}
 api.post('/karty', (req, res) => {
   const { nazwa, opis = '' } = req.body;
   const r = db.prepare('INSERT INTO karty_ratingu (nazwa, opis) VALUES (?,?)').run(nazwa, opis);
   res.json({ id: Number(r.lastInsertRowid) });
 });
 api.put('/kamienie/:id', (req, res) => {
-  updateById('kamienie_karty', req.params.id, pick(req.body, ['nazwa', 'prawd_start', 'prawd_min', 'prawd_max', 'kolejnosc']));
+  const km = db.prepare('SELECT * FROM kamienie_karty WHERE id = ?').get(req.params.id);
+  if (!km) return res.status(404).json({ error: 'Nie znaleziono kamienia' });
+  updateById('kamienie_karty', req.params.id, pick(req.body,
+    ['nazwa', 'kod', 'prawd_start', 'prawd_min', 'prawd_max', 'kolejnosc', 'prog_zastygniecia_dni', 'definicja_spelnienia', 'elastyczna_kolejnosc']));
+  if (!walidujPasma(km.karta_id, res)) {
+    // przywroc poprzednie wartosci pasm przy bledzie walidacji
+    db.prepare('UPDATE kamienie_karty SET prawd_start=?, prawd_min=?, prawd_max=?, kolejnosc=? WHERE id=?')
+      .run(km.prawd_start, km.prawd_min, km.prawd_max, km.kolejnosc, km.id);
+    return;
+  }
   res.json({ ok: true });
 });
 api.post('/karty/:id/kamienie', (req, res) => {
-  const { nazwa, prawd_start, prawd_min, prawd_max, kolejnosc } = req.body;
-  const r = db.prepare('INSERT INTO kamienie_karty (karta_id, kolejnosc, nazwa, prawd_start, prawd_min, prawd_max) VALUES (?,?,?,?,?,?)')
-    .run(req.params.id, kolejnosc, nazwa, prawd_start, prawd_min, prawd_max);
+  const { nazwa, kod, prawd_start, prawd_min, prawd_max, kolejnosc, prog_zastygniecia_dni, definicja_spelnienia } = req.body;
+  if (!nazwa) return res.status(400).json({ error: 'Nazwa kamienia (fakt po stronie klienta) jest wymagana' });
+  const r = db.prepare(`INSERT INTO kamienie_karty
+    (karta_id, kolejnosc, nazwa, kod, prawd_start, prawd_min, prawd_max, prog_zastygniecia_dni, definicja_spelnienia)
+    VALUES (?,?,?,?,?,?,?,?,?)`)
+    .run(req.params.id, kolejnosc ?? 99, nazwa, kod || null, prawd_start ?? 50, prawd_min ?? 0, prawd_max ?? 100,
+      prog_zastygniecia_dni ?? null, definicja_spelnienia || null);
   res.json({ id: Number(r.lastInsertRowid) });
+});
+api.delete('/kamienie/:id', (req, res) => {
+  const uzyc = db.prepare('SELECT COUNT(*) c FROM tematy WHERE kamien_id = ?').get(req.params.id).c
+    + db.prepare('SELECT COUNT(*) c FROM potwierdzenia_kamieni WHERE kamien_id = ?').get(req.params.id).c;
+  if (uzyc > 0) return res.status(400).json({ error: 'Kamień jest używany przez tematy/potwierdzenia — nie można usunąć. Zmień jego definicję zamiast usuwać.' });
+  db.prepare('DELETE FROM kamien_kryteria WHERE kamien_id = ?').run(req.params.id);
+  db.prepare('DELETE FROM task_szablony WHERE kamien_id = ?').run(req.params.id);
+  db.prepare('DELETE FROM kamienie_karty WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+// Biblioteka zadan (TaskTemplate) CRUD
+api.post('/kamienie/:id/zadania', (req, res) => {
+  const { nazwa, oczekiwany_efekt, co_dalej_sukces, co_dalej_porazka, typ } = req.body;
+  if (!nazwa) return res.status(400).json({ error: 'Nazwa zadania jest wymagana' });
+  const r = db.prepare(`INSERT INTO task_szablony (kamien_id, nazwa, oczekiwany_efekt, co_dalej_sukces, co_dalej_porazka, typ, kolejnosc)
+    VALUES (?,?,?,?,?,?,99)`).run(req.params.id, nazwa, oczekiwany_efekt || null, co_dalej_sukces || null, co_dalej_porazka || null, typ || null);
+  res.json({ id: Number(r.lastInsertRowid) });
+});
+api.put('/zadania-szablony/:id', (req, res) => {
+  updateById('task_szablony', req.params.id, pick(req.body, ['nazwa', 'oczekiwany_efekt', 'co_dalej_sukces', 'co_dalej_porazka', 'typ', 'kolejnosc', 'aktywny']));
+  res.json({ ok: true });
+});
+api.delete('/zadania-szablony/:id', (req, res) => {
+  db.prepare('UPDATE task_szablony SET aktywny = 0 WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+// Kryteria kamienia (checklista etapu) CRUD
+api.post('/kamienie/:id/kryteria', (req, res) => {
+  const { tekst, obowiazkowe = 1 } = req.body;
+  if (!tekst) return res.status(400).json({ error: 'Treść kryterium jest wymagana' });
+  const r = db.prepare('INSERT INTO kamien_kryteria (kamien_id, tekst, obowiazkowe, kolejnosc) VALUES (?,?,?,99)')
+    .run(req.params.id, tekst, obowiazkowe ? 1 : 0);
+  res.json({ id: Number(r.lastInsertRowid) });
+});
+api.put('/kryteria/:id', (req, res) => {
+  updateById('kamien_kryteria', req.params.id, pick(req.body, ['tekst', 'obowiazkowe', 'kolejnosc', 'aktywny']));
+  res.json({ ok: true });
+});
+api.delete('/kryteria/:id', (req, res) => {
+  db.prepare('UPDATE kamien_kryteria SET aktywny = 0 WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+// Powody zamkniecia CRUD (edytor lejkow)
+api.post('/powody-zamkniecia', (req, res) => {
+  const { kamien_kod, nazwa, czy_recyklingowalny = 0, offset_powrotu_mies = 0 } = req.body;
+  if (!nazwa) return res.status(400).json({ error: 'Nazwa powodu jest wymagana' });
+  const r = db.prepare('INSERT INTO powody_zamkniecia (kamien_kod, nazwa, czy_recyklingowalny, offset_powrotu_mies) VALUES (?,?,?,?)')
+    .run(kamien_kod || null, nazwa, czy_recyklingowalny ? 1 : 0, offset_powrotu_mies || 0);
+  res.json({ id: Number(r.lastInsertRowid) });
+});
+api.put('/powody-zamkniecia/:id', (req, res) => {
+  updateById('powody_zamkniecia', req.params.id, pick(req.body, ['kamien_kod', 'nazwa', 'czy_recyklingowalny', 'offset_powrotu_mies', 'aktywny']));
+  res.json({ ok: true });
+});
+api.delete('/powody-zamkniecia/:id', (req, res) => {
+  db.prepare('UPDATE powody_zamkniecia SET aktywny = 0 WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
 });
 
 // ---------- TEMATY (pipeline) ----------
 const TEMAT_POLA = ['nazwa', 'klient_id', 'inwestycja_id', 'osoba_id', 'handlowiec', 'zrodlo',
   'model_realizacji', 'co_budujemy', 'data_startu', 'wartosc_kontraktu', 'marza_pct', 'termin_oferty',
-  'termin_realizacji', 'czas_trwania_mies', 'czy_bierzemy', 'powod_odpuszczenia', 'notatki'];
+  'termin_realizacji', 'czas_trwania_mies', 'czy_bierzemy', 'powod_odpuszczenia', 'notatki', 'tagi'];
 
 api.get('/tematy', (req, res) => {
   sprawdzRecykling();
@@ -696,9 +807,12 @@ api.get('/tematy/:id', (req, res) => {
   t.kamienie = db.prepare('SELECT * FROM kamienie_karty WHERE karta_id = ? ORDER BY kolejnosc').all(t.karta_id);
   const potw = db.prepare('SELECT * FROM potwierdzenia_kamieni WHERE temat_id = ? ORDER BY data').all(t.id);
   const potwSet = new Set(potw.map(p => p.kamien_id));
+  const odhaczone = new Set(db.prepare('SELECT kryterium_id FROM kryteria_odhaczenia WHERE temat_id = ?').all(t.id).map(r => r.kryterium_id));
   for (const km of t.kamienie) {
     km.potwierdzony = potwSet.has(km.id);
     km.szablony = db.prepare('SELECT * FROM task_szablony WHERE kamien_id = ? AND aktywny = 1 ORDER BY kolejnosc').all(km.id);
+    km.kryteria = db.prepare('SELECT * FROM kamien_kryteria WHERE kamien_id = ? AND aktywny = 1 ORDER BY kolejnosc').all(km.id)
+      .map(kr => ({ ...kr, odhaczone: odhaczone.has(kr.id) }));
   }
   t.potwierdzenia = potw;
   t.dni_w_etapie = dniWEtapie(t);
@@ -721,6 +835,14 @@ api.post('/tematy/:id/potwierdz-kamien', (req, res) => {
   if (db.prepare('SELECT 1 FROM potwierdzenia_kamieni WHERE temat_id = ? AND kamien_id = ?').get(t.id, kamien_id)) {
     return res.status(400).json({ error: 'Kamień już potwierdzony' });
   }
+  // TWARDA bramka checklisty: wszystkie kryteria obowiazkowe kamienia musza byc odhaczone
+  const brakujace = db.prepare(`SELECT kk.tekst FROM kamien_kryteria kk
+    WHERE kk.kamien_id = ? AND kk.aktywny = 1 AND kk.obowiazkowe = 1
+    AND NOT EXISTS (SELECT 1 FROM kryteria_odhaczenia ko WHERE ko.kryterium_id = kk.id AND ko.temat_id = ?)`)
+    .all(kamien_id, t.id);
+  if (brakujace.length) {
+    return res.status(400).json({ error: `Nie odhaczono kryteriów obowiązkowych kamienia ${km.kod || ''}: ${brakujace.map(b => b.tekst).join('; ')}` });
+  }
   db.prepare('INSERT INTO potwierdzenia_kamieni (temat_id, kamien_id, dowod, potwierdzajacy) VALUES (?,?,?,?)')
     .run(t.id, kamien_id, dowod, potwierdzajacy || t.handlowiec || null);
   const stan = przeliczTemat(t.id);
@@ -730,6 +852,25 @@ api.post('/tematy/:id/potwierdz-kamien', (req, res) => {
   // WYGRANA potwierdzona -> temat obserwacyjny F1-watch
   const f1 = stan.wygrany ? utworzF1Watch(db.prepare('SELECT * FROM tematy WHERE id = ?').get(t.id)) : null;
   res.json({ ok: true, ...stan, f1_watch: f1 });
+});
+
+// Odhaczenie / cofniecie kryterium checklisty kamienia
+api.post('/tematy/:id/kryterium', (req, res) => {
+  const { kryterium_id, odhaczone, kto } = req.body;
+  const t = db.prepare('SELECT * FROM tematy WHERE id = ?').get(req.params.id);
+  if (!t) return res.status(404).json({ error: 'Nie znaleziono tematu' });
+  const kr = db.prepare('SELECT * FROM kamien_kryteria WHERE id = ?').get(kryterium_id);
+  if (!kr) return res.status(400).json({ error: 'Nieznane kryterium' });
+  if (odhaczone) {
+    db.prepare('INSERT OR IGNORE INTO kryteria_odhaczenia (temat_id, kryterium_id, kto) VALUES (?,?,?)')
+      .run(t.id, kryterium_id, kto || t.handlowiec || null);
+  } else {
+    db.prepare('DELETE FROM kryteria_odhaczenia WHERE temat_id = ? AND kryterium_id = ?').run(t.id, kryterium_id);
+  }
+  const spelnione = db.prepare(`SELECT COUNT(*) c FROM kryteria_odhaczenia ko
+    JOIN kamien_kryteria kk ON kk.id = ko.kryterium_id WHERE ko.temat_id = ? AND kk.kamien_id = ?`).get(t.id, kr.kamien_id).c;
+  const wszystkie = db.prepare('SELECT COUNT(*) c FROM kamien_kryteria WHERE kamien_id = ? AND aktywny = 1').get(kr.kamien_id).c;
+  res.json({ ok: true, spelnione, wszystkie });
 });
 
 // Cofniecie potwierdzenia (korekta) - z powodem
@@ -1331,6 +1472,77 @@ api.get('/prognoza', (req, res) => {
   });
 });
 
+// ---------- CELE SPRZEDAZOWE (per handlowiec i okres) ----------
+function zakresOkresu(okres) {
+  // '2026Q3' -> [2026-07-01, 2026-10-01); '2026' -> caly rok
+  const q = String(okres).match(/^(\d{4})Q([1-4])$/);
+  if (q) {
+    const rok = Number(q[1]), kw = Number(q[2]);
+    const od = `${rok}-${String((kw - 1) * 3 + 1).padStart(2, '0')}-01`;
+    const doM = kw === 4 ? `${rok + 1}-01-01` : `${rok}-${String(kw * 3 + 1).padStart(2, '0')}-01`;
+    return [od, doM];
+  }
+  const r = String(okres).match(/^(\d{4})$/);
+  if (r) return [`${r[1]}-01-01`, `${Number(r[1]) + 1}-01-01`];
+  return null;
+}
+
+api.get('/cele', (req, res) => {
+  res.json(db.prepare('SELECT * FROM cele WHERE aktywny = 1 ORDER BY okres DESC, handlowiec').all());
+});
+api.post('/cele', (req, res) => {
+  const { okres, handlowiec, przychod_wazony, marza, wygrane, tematy_komitet, notatka } = req.body;
+  if (!okres || !zakresOkresu(okres)) return res.status(400).json({ error: 'Okres w formacie 2026Q3 lub 2026' });
+  if (!handlowiec) return res.status(400).json({ error: 'Handlowiec jest wymagany' });
+  const r = db.prepare('INSERT INTO cele (okres, handlowiec, przychod_wazony, marza, wygrane, tematy_komitet, notatka) VALUES (?,?,?,?,?,?,?)')
+    .run(okres, handlowiec, przychod_wazony ?? null, marza ?? null, wygrane ?? null, tematy_komitet ?? null, notatka || null);
+  res.json({ id: Number(r.lastInsertRowid) });
+});
+api.put('/cele/:id', (req, res) => {
+  updateById('cele', req.params.id, pick(req.body, ['okres', 'handlowiec', 'przychod_wazony', 'marza', 'wygrane', 'tematy_komitet', 'notatka', 'aktywny']));
+  res.json({ ok: true });
+});
+api.delete('/cele/:id', (req, res) => {
+  db.prepare('UPDATE cele SET aktywny = 0 WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+// Postep wykonania celow: plan vs wykonanie per cel (przychod wazony z otwartego pipeline
+// handlowca + wygrane/komitety w okresie z historii)
+api.get('/cele/postep', (req, res) => {
+  const cele = db.prepare('SELECT * FROM cele WHERE aktywny = 1 ORDER BY okres DESC, handlowiec').all();
+  const wynik = [];
+  for (const c of cele) {
+    const [od, doD] = zakresOkresu(c.okres) || [null, null];
+    const otwarte = db.prepare(`SELECT COALESCE(SUM(wartosc_kontraktu * prawdopodobienstwo / 100.0), 0) w,
+      COALESCE(SUM(wartosc_kontraktu * prawdopodobienstwo / 100.0 * COALESCE(marza_pct, 9) / 100.0), 0) m
+      FROM tematy WHERE status = 'otwarty' AND handlowiec = ?`).get(c.handlowiec);
+    const wygraneOkres = od ? db.prepare(`SELECT COUNT(DISTINCT t.id) c,
+        COALESCE(SUM(t.wartosc_kontraktu), 0) w
+      FROM tematy t JOIN historia_tematu h ON h.temat_id = t.id
+      WHERE t.status = 'wygrany' AND t.handlowiec = ?
+        AND (h.typ_zmiany = 'zamkniecie' OR h.typ_zmiany = 'potwierdzenie kamienia')
+        AND (h.wartosc_po = 'wygrany' OR h.wartosc_po LIKE '%100%')
+        AND h.data >= ? AND h.data < ?`).get(c.handlowiec, od, doD) : { c: 0, w: 0 };
+    const komitetOkres = od ? db.prepare(`SELECT COUNT(DISTINCT pk.temat_id) c
+      FROM potwierdzenia_kamieni pk
+      JOIN kamienie_karty km ON km.id = pk.kamien_id
+      JOIN tematy t ON t.id = pk.temat_id
+      WHERE km.kod IN ('M5','F3') AND t.handlowiec = ? AND pk.data >= ? AND pk.data < ?`).get(c.handlowiec, od, doD) : { c: 0 };
+    wynik.push({
+      ...c,
+      wykonanie: {
+        przychod_wazony: +otwarte.w.toFixed(1),
+        marza: +otwarte.m.toFixed(2),
+        wygrane: wygraneOkres.c,
+        wygrane_wartosc: +Number(wygraneOkres.w).toFixed(1),
+        tematy_komitet: komitetOkres.c,
+      },
+    });
+  }
+  res.json(wynik);
+});
+
 // ---------- METRYKI PIPELINE (dashboard v2) ----------
 function mediana(arr) {
   if (!arr.length) return null;
@@ -1397,8 +1609,31 @@ api.get('/metryki', (req, res) => {
     SUM(CASE WHEN data_nastepnego_przegladu <= date('now') THEN 1 ELSE 0 END) zalegle
     FROM klienci WHERE klient_powracajacy = 1`).get();
 
+  // Sales velocity = (liczba otwartych x sr. wartosc x win rate) / sr. dlugosc cyklu (dni)
+  const otwartePipe = db.prepare(`SELECT COUNT(*) c, COALESCE(AVG(wartosc_kontraktu), 0) sr FROM tematy WHERE status = 'otwarty'`).get();
+  const wygrPrzegr = db.prepare(`SELECT
+    SUM(CASE WHEN status = 'wygrany' THEN 1 ELSE 0 END) w,
+    SUM(CASE WHEN status = 'przegrany' THEN 1 ELSE 0 END) p FROM tematy`).get();
+  // Male proby daja absurdy (win rate 100%, cykl 1 dzien) - ponizej progow uzywamy baseline 2025
+  const MIN_ZAMKNIETYCH = 5, MIN_CYKLI = 3;
+  const zamknietych = wygrPrzegr.w + wygrPrzegr.p;
+  const winRate = zamknietych >= MIN_ZAMKNIETYCH ? wygrPrzegr.w / zamknietych : 0.25; // baseline 2025
+  const cykle = db.prepare(`SELECT t.utworzono, h.data FROM tematy t
+    JOIN historia_tematu h ON h.temat_id = t.id
+    WHERE t.status = 'wygrany' AND (h.typ_zmiany = 'zamkniecie' AND h.wartosc_po = 'wygrany')`).all()
+    .map(r => Math.max(1, Math.round((new Date(r.data + 'Z') - new Date(r.utworzono + 'Z')) / 86400000)));
+  const srCyklDni = cykle.length >= MIN_CYKLI
+    ? Math.round(cykle.reduce((s, d) => s + d, 0) / cykle.length) : 365; // baseline: cykl ~12 mc
+  const fallback = zamknietych < MIN_ZAMKNIETYCH || cykle.length < MIN_CYKLI;
+  const velocity = srCyklDni > 0 ? +((otwartePipe.c * otwartePipe.sr * winRate) / srCyklDni * 30).toFixed(1) : null;
+
   res.json({
     lejek, utrata, zadania,
+    velocity: {
+      mln_na_miesiac: velocity, otwarte: otwartePipe.c, sr_wartosc: +otwartePipe.sr.toFixed(1),
+      win_rate_pct: Math.round(winRate * 100), sr_cykl_dni: srCyklDni,
+      fallback,
+    },
     am_coverage: {
       konta: am.total || 0, z_planem: am.z_planem || 0, zalegle: am.zalegle || 0,
       pokrycie_pct: am.total ? Math.round(100 * (am.z_planem || 0) / am.total) : null,

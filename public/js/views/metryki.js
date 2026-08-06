@@ -11,6 +11,8 @@ export async function widokMetryki(kontener) {
     el('p', { class: 'podtytul' }, 'Gdzie tracimy tematy, ile trwa etap, co domyka kamienie. Wsad do korekty biblioteki zadań i kalibracji prawdopodobieństw.'),
 
     el('div', { class: 'kafle' },
+      kafel('Sales velocity', m.velocity.mln_na_miesiac === null ? '—' : `${m.velocity.mln_na_miesiac} mln/mc`,
+        `${m.velocity.otwarte} otwartych × ${m.velocity.sr_wartosc} mln śr. × ${m.velocity.win_rate_pct}% win / ${m.velocity.sr_cykl_dni} dni cyklu` + (m.velocity.fallback ? ' (część założeń z baseline 2025)' : '')),
       kafel('Konta AM z planem opieki', m.am_coverage.pokrycie_pct === null ? '—' : m.am_coverage.pokrycie_pct + '%',
         `${m.am_coverage.z_planem} / ${m.am_coverage.konta} kont powracających`),
       kafel('Przeglądy zaległe', String(m.am_coverage.zalegle), 'konta z datą przeglądu w przeszłości')),

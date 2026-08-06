@@ -3,6 +3,7 @@ import { widokPulpit } from './views/dashboard.js';
 import { widokRoadmapa } from './views/roadmapa.js';
 import { widokRecykling } from './views/recykling.js';
 import { widokMetryki } from './views/metryki.js';
+import { widokLejki } from './views/lejki.js';
 import { widokLeady, widokLead } from './views/leady.js';
 import { widokImport } from './views/import.js';
 import { widokImportPipeline } from './views/importPipeline.js';
@@ -22,6 +23,7 @@ const trasy = [
   [/^\/$/, widokRoadmapa],
   [/^\/pulpit$/, widokPulpit],
   [/^\/metryki$/, widokMetryki],
+  [/^\/lejki$/, widokLejki],
   [/^\/recykling$/, widokRecykling],
   [/^\/leady$/, widokLeady],
   [/^\/leady\/(\d+)$/, widokLead],

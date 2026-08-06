@@ -7,47 +7,129 @@ import { formularzDzialania, listaDzialan } from './dzialania.js';
 
 export async function widokPipeline(kontener) {
   const [tematy, listaKart] = await Promise.all([GET('/tematy'), karty()]);
-  const otwarte = tematy.filter(t => t.status === 'otwarty');
+  const wszystkieOtwarte = tematy.filter(t => t.status === 'otwarty');
   const inne = tematy.filter(t => t.status !== 'otwarty');
-  const wartoscW = otwarte.reduce((s, t) => s + (t.wartosc_kontraktu || 0) * t.prawdopodobienstwo / 100, 0);
 
-  // Grupowanie po pipeline persony (kod)
-  const kartaWg = Object.fromEntries(listaKart.map(k => [k.id, k]));
-  const pipeliny = [...new Set(otwarte.map(t => t.karta_id))].map(id => kartaWg[id]).filter(Boolean);
+  // Filtry (handlowiec / tag) - w stylu widokow Livespace
+  let filtrHandlowiec = '', filtrTag = '';
+  const handlowcy = [...new Set(wszystkieOtwarte.map(t => t.handlowiec).filter(Boolean))].sort();
+  const tagi = [...new Set(wszystkieOtwarte.flatMap(t => (t.tagi || '').split(',').map(s => s.trim()).filter(Boolean)))].sort();
+
+  const naglowekInfo = el('p', { class: 'podtytul' });
+  const boardBox = el('div');
+
+  function rysuj() {
+    const otwarte = wszystkieOtwarte.filter(t =>
+      (!filtrHandlowiec || t.handlowiec === filtrHandlowiec) &&
+      (!filtrTag || (t.tagi || '').split(',').map(s => s.trim()).includes(filtrTag)));
+    const wartoscW = otwarte.reduce((s, t) => s + (t.wartosc_kontraktu || 0) * t.prawdopodobienstwo / 100, 0);
+    naglowekInfo.textContent = `${otwarte.length} tematów otwartych · wartość ważona ${mln(wartoscW)} PLN · przeciągnij kartę na następną kolumnę, aby potwierdzić kamień`;
+
+    const kartaWg = Object.fromEntries(listaKart.map(k => [k.id, k]));
+    const pipeliny = [...new Set(otwarte.map(t => t.karta_id))].map(id => kartaWg[id]).filter(Boolean);
+    boardBox.innerHTML = '';
+    if (!pipeliny.length) {
+      boardBox.append(el('div', { class: 'karta-box puste' }, 'Brak otwartych tematów (w tym filtrze).'));
+      return;
+    }
+    for (const karta of pipeliny) {
+      const kamienieKarty = karta.kamienie || [];
+      boardBox.append(el('div', {},
+        pipeliny.length > 1 ? el('h2', {}, karta.nazwa) : '',
+        el('div', { class: 'kanban' },
+          ...kamienieKarty.map(km => {
+            const wKol = otwarte.filter(t => t.kamien_id === km.id);
+            const suma = wKol.reduce((s, t) => s + (t.wartosc_kontraktu || 0), 0);
+            const kolumna = el('div', { class: 'kanban-kolumna' },
+              el('div', { class: 'kanban-naglowek' },
+                el('span', {}, km.kod || km.nazwa.slice(0, 14)),
+                el('span', { title: km.nazwa }, `${wKol.length}${suma ? ' · ' + mln(suma) : ''}`)),
+              ...wKol.map(t => kartaTematuKanban(t)));
+            // Drag&drop: upusc karte -> potwierdzenie (nastepna kolumna) lub cofniecie (wczesniejsza)
+            kolumna.addEventListener('dragover', e => { e.preventDefault(); kolumna.style.outline = '2px dashed var(--akcent)'; });
+            kolumna.addEventListener('dragleave', () => kolumna.style.outline = '');
+            kolumna.addEventListener('drop', async (e) => {
+              e.preventDefault(); kolumna.style.outline = '';
+              const tematId = Number(e.dataTransfer.getData('temat_id'));
+              const t = otwarte.find(x => x.id === tematId);
+              if (!t || t.karta_id !== karta.id) { if (t) toast('Temat należy do innego lejka', true); return; }
+              obsluzDrop(t, km, kamienieKarty);
+            });
+            return kolumna;
+          }))));
+    }
+  }
+
+  function kartaTematuKanban(t) {
+    const karta = el('div', {
+      class: 'kanban-karta', draggable: 'true',
+      style: (t.zastygly ? 'border-left-color:var(--zolty);' : '') + 'cursor:grab;',
+      onclick: () => location.hash = '#/tematy/' + t.id
+    },
+      el('div', { class: 'kk-id' }, t.identyfikator),
+      el('div', { class: 'kk-info' },
+        el('span', {}, t.klient_nazwa || '—'),
+        el('span', {}, t.wartosc_kontraktu ? mln(t.wartosc_kontraktu) : '—')),
+      el('div', { class: 'kk-info' },
+        el('span', {}, pct(t.prawdopodobienstwo)),
+        el('span', { style: t.zastygly ? 'color:var(--zolty); font-weight:700' : 'color:var(--tekst-2)' },
+          `${t.dni_w_etapie} dni${t.zastygly ? ' 🕒' : ''}`)),
+      el('div', { style: 'margin-top:6px' }, pasekPrawd(t.prawdopodobienstwo)),
+      (t.tagi || '').trim() ? el('div', { class: 'kk-info', style: 'margin-top:4px' },
+        el('span', {}, ...(t.tagi || '').split(',').map(s => s.trim()).filter(Boolean).slice(0, 3)
+          .map(tag => el('span', { class: 'badge badge-szary', style: 'margin-right:4px' }, tag)))) : '',
+      t.status_e2e ? el('div', { class: 'kk-info', style: 'margin-top:6px' },
+        el('span', { class: 'badge badge-nieb' }, '▶ ' + t.status_e2e)) : '');
+    karta.addEventListener('dragstart', e => e.dataTransfer.setData('temat_id', String(t.id)));
+    return karta;
+  }
+
+  async function obsluzDrop(t, docelowy, kamienieKarty) {
+    const akt = kamienieKarty.find(k => k.id === t.kamien_id);
+    if (!akt || docelowy.id === akt.id) return;
+    if (docelowy.kolejnosc === akt.kolejnosc + 1) {
+      // przod o 1 = potwierdzenie aktualnego kamienia (z checklista i dowodem)
+      const det = await GET('/tematy/' + t.id);
+      const kmDet = det.kamienie.find(k => k.id === akt.id);
+      const obow = (kmDet.kryteria || []).filter(k => k.obowiazkowe && !k.odhaczone).length;
+      if (obow) { toast(`Najpierw odhacz ${obow} kryteriów obowiązkowych kamienia ${akt.kod} (wejdź w temat)`, true); return; }
+      potwierdzKamien(det, kmDet, () => location.reload());
+    } else if (docelowy.kolejnosc > akt.kolejnosc + 1) {
+      toast(`Kamienie potwierdzamy po kolei — najpierw ${akt.kod}`, true);
+    } else {
+      // wstecz = cofniecie potwierdzen do poziomu docelowej kolumny
+      const doCofniecia = kamienieKarty.filter(k => k.kolejnosc >= docelowy.kolejnosc && k.kolejnosc < akt.kolejnosc);
+      const powod = el('input', { placeholder: 'np. klient wycofał deklarację' });
+      modal(`Cofnij temat do ${docelowy.kod || docelowy.nazwa}`,
+        el('div', {},
+          el('div', { class: 'info-box' }, `Cofnięte zostaną potwierdzenia: ${doCofniecia.map(k => k.kod).join(', ')}.`),
+          el('div', { class: 'pole' }, el('label', {}, 'Powód cofnięcia *'), powod)),
+        [['Cofnij', 'btn-czerwony', async () => {
+          if (!powod.value.trim()) { toast('Powód jest wymagany', true); return false; }
+          for (const k of [...doCofniecia].reverse()) {
+            await POST(`/tematy/${t.id}/cofnij-kamien`, { kamien_id: k.id, powod: powod.value });
+          }
+          toast('Cofnięto'); location.reload();
+        }]]);
+    }
+  }
+
+  rysuj();
 
   kontener.append(
     el('div', { class: 'naglowek-akcje' },
       el('div', {},
         el('h1', {}, 'Pipeline sprzedażowy'),
-        el('p', { class: 'podtytul' }, `${otwarte.length} tematów otwartych · wartość ważona ${mln(wartoscW)} PLN · awans tylko przez potwierdzenie kamienia z dowodem`)),
+        naglowekInfo),
       el('div', { class: 'info-box', style: 'margin:0' }, 'Tematy powstają z leadów przez „Uruchom temat" (wejście na M1)')),
-
-    pipeliny.length ? el('div', {}, ...pipeliny.map(karta => el('div', {},
-      pipeliny.length > 1 ? el('h2', {}, karta.nazwa) : '',
-      el('div', { class: 'kanban' },
-        ...(karta.kamienie || []).map(km => {
-          const wKol = otwarte.filter(t => t.kamien_id === km.id);
-          const suma = wKol.reduce((s, t) => s + (t.wartosc_kontraktu || 0), 0);
-          return el('div', { class: 'kanban-kolumna' },
-            el('div', { class: 'kanban-naglowek' },
-              el('span', {}, km.kod || km.nazwa.slice(0, 14)),
-              el('span', { title: km.nazwa }, `${wKol.length}${suma ? ' · ' + mln(suma) : ''}`)),
-            ...wKol.map(t => el('div', {
-              class: 'kanban-karta', style: t.zastygly ? 'border-left-color:var(--zolty)' : '',
-              onclick: () => location.hash = '#/tematy/' + t.id
-            },
-              el('div', { class: 'kk-id' }, t.identyfikator),
-              el('div', { class: 'kk-info' },
-                el('span', {}, t.klient_nazwa || '—'),
-                el('span', {}, t.wartosc_kontraktu ? mln(t.wartosc_kontraktu) : '—')),
-              el('div', { class: 'kk-info' },
-                el('span', {}, pct(t.prawdopodobienstwo)),
-                el('span', { style: t.zastygly ? 'color:var(--zolty); font-weight:700' : 'color:var(--tekst-2)' },
-                  `${t.dni_w_etapie} dni${t.zastygly ? ' 🕒' : ''}`)),
-              el('div', { style: 'margin-top:6px' }, pasekPrawd(t.prawdopodobienstwo)),
-              t.status_e2e ? el('div', { class: 'kk-info', style: 'margin-top:6px' },
-                el('span', { class: 'badge badge-nieb' }, '▶ ' + t.status_e2e)) : '')));
-        }))))) : el('div', { class: 'karta-box puste' }, 'Brak otwartych tematów. Uruchom temat z zakwalifikowanego leada.'),
+    el('div', { class: 'filtry' },
+      el('select', { onchange: e => { filtrHandlowiec = e.target.value; rysuj(); } },
+        el('option', { value: '' }, 'Handlowiec: wszyscy'),
+        ...handlowcy.map(h => el('option', { value: h }, h))),
+      el('select', { onchange: e => { filtrTag = e.target.value; rysuj(); } },
+        el('option', { value: '' }, 'Tag: wszystkie'),
+        ...tagi.map(t => el('option', { value: t }, t)))),
+    boardBox,
 
     inne.length ? el('div', {},
       el('h2', {}, 'Tematy zamknięte / w recyklingu'),
@@ -149,20 +231,49 @@ export async function widokTemat(kontener, id) {
 
 function wierszKamienia(km, t, otwarty, odswiez) {
   const aktualny = km.id === t.kamien_id;
+  const kryteria = km.kryteria || [];
+  const spelnione = kryteria.filter(k => k.odhaczone).length;
+  const obowNieodhaczone = kryteria.filter(k => k.obowiazkowe && !k.odhaczone).length;
+
+  // Checklista kryteriow (Livespace-style): odhaczanie na aktualnym/nastepnych kamieniach
+  const listaKryteriow = kryteria.length && !km.potwierdzony ? el('div', { style: 'margin-top:6px' },
+    ...kryteria.map(kr => {
+      const cb = el('input', { type: 'checkbox', disabled: !otwarty });
+      cb.checked = kr.odhaczone;
+      cb.addEventListener('change', async () => {
+        try {
+          await POST(`/tematy/${t.id}/kryterium`, { kryterium_id: kr.id, odhaczone: cb.checked });
+          odswiez();
+        } catch (e) { toast(e.message, true); }
+      });
+      return el('label', { style: 'display:flex; gap:8px; align-items:flex-start; font-size:12px; padding:2px 0; cursor:pointer' },
+        cb, el('span', { style: kr.odhaczone ? 'text-decoration:line-through; color:var(--tekst-2)' : '' },
+          kr.obowiazkowe ? el('b', { style: 'color:var(--czerwony)' }, '* ') : '', kr.tekst));
+    })) : '';
+
   return el('div', {
-    style: `display:flex; justify-content:space-between; align-items:center; gap:12px; padding:8px 12px; border-radius:8px; border:1px solid var(--linia);`
+    style: `padding:8px 12px; border-radius:8px; border:1px solid var(--linia);`
       + (km.potwierdzony ? 'background:var(--zielony-tlo)' : aktualny ? 'background:var(--szary-tlo); border-color:var(--akcent)' : '')
   },
-    el('div', {},
-      el('div', {}, el('b', {}, km.kod), ' ', badge(km.prawd_start + '%', km.potwierdzony ? 'zielony' : 'szary'),
-        aktualny && !km.potwierdzony ? ' ' : '', aktualny && !km.potwierdzony ? badge('aktualny', 'akcent') : '',
-        km.potwierdzony ? ' ✓' : ''),
-      el('div', { style: 'font-size:13px; margin-top:2px' }, km.nazwa),
-      km.definicja_spelnienia ? el('div', { style: 'font-size:11px; color:var(--tekst-2); margin-top:2px' }, 'dowód: ' + km.definicja_spelnienia) : ''),
-    otwarty ? el('div', { style: 'flex-shrink:0' },
-      km.potwierdzony
-        ? el('button', { class: 'btn btn-maly', onclick: () => cofnijKamien(t, km, odswiez) }, 'Cofnij')
-        : el('button', { class: 'btn btn-maly btn-zielony', onclick: () => potwierdzKamien(t, km, odswiez) }, 'Potwierdź')) : '');
+    el('div', { style: 'display:flex; justify-content:space-between; align-items:center; gap:12px' },
+      el('div', {},
+        el('div', {}, el('b', {}, km.kod), ' ', badge(km.prawd_start + '%', km.potwierdzony ? 'zielony' : 'szary'),
+          aktualny && !km.potwierdzony ? ' ' : '', aktualny && !km.potwierdzony ? badge('aktualny', 'akcent') : '',
+          kryteria.length && !km.potwierdzony ? ' ' : '',
+          kryteria.length && !km.potwierdzony ? badge(`${spelnione}/${kryteria.length} kryteriów`, spelnione === kryteria.length ? 'zielony' : 'szary') : '',
+          km.potwierdzony ? ' ✓' : ''),
+        el('div', { style: 'font-size:13px; margin-top:2px' }, km.nazwa)),
+      otwarty ? el('div', { style: 'flex-shrink:0' },
+        km.potwierdzony
+          ? el('button', { class: 'btn btn-maly', onclick: () => cofnijKamien(t, km, odswiez) }, 'Cofnij')
+          : el('button', {
+            class: 'btn btn-maly ' + (obowNieodhaczone ? '' : 'btn-zielony'),
+            title: obowNieodhaczone ? `Odhacz ${obowNieodhaczone} kryteriów obowiązkowych (*)` : 'Gotowy do potwierdzenia',
+            onclick: () => obowNieodhaczone
+              ? toast(`Najpierw odhacz ${obowNieodhaczone} kryteriów obowiązkowych (*)`, true)
+              : potwierdzKamien(t, km, odswiez)
+          }, 'Potwierdź')) : ''),
+    listaKryteriow);
 }
 
 function wierszSzablonu(s, t, kamien, odswiez) {
@@ -179,7 +290,8 @@ function wierszSzablonu(s, t, kamien, odswiez) {
 }
 
 function potwierdzKamien(t, km, odswiez) {
-  const dowod = el('textarea', { placeholder: km.definicja_spelnienia || 'Fakt po stronie klienta: notatka z rozmowy, data spotkania, dokument, link' });
+  const prefill = (km.kryteria || []).filter(k => k.odhaczone).map(k => '✓ ' + k.tekst).join('\n');
+  const dowod = el('textarea', { placeholder: km.definicja_spelnienia || 'Fakt po stronie klienta: notatka z rozmowy, data spotkania, dokument, link' }, prefill);
   const kto = el('input', { value: t.handlowiec || '', placeholder: 'kto potwierdza' });
   modal(`Potwierdź kamień ${km.kod}`, el('div', {},
     el('div', { class: 'info-box' }, km.nazwa),
@@ -217,6 +329,7 @@ function formularzTematu(t, sl, poZapisie) {
     pole({ name: 'termin_oferty', label: 'Termin złożenia oferty', typ: 'date', wartosc: t.termin_oferty }),
     pole({ name: 'termin_realizacji', label: 'Termin rozpoczęcia realizacji', typ: 'date', wartosc: t.termin_realizacji }),
     pole({ name: 'czas_trwania_mies', label: 'Czas trwania (mies.)', typ: 'number', wartosc: t.czas_trwania_mies }),
+    pole({ name: 'tagi', label: 'Tagi (po przecinku)', wartosc: t.tagi, pomoc: 'np. farmacja, rozbudowa, OZE — filtry w kanbanie' }),
     pole({ name: 'notatki', label: 'Notatki', typ: 'textarea', wartosc: t.notatki, szerokie: true }));
   modal('Edytuj temat ' + t.identyfikator, form, [['Zapisz', 'btn-glowny', async () => {
     await PUT('/tematy/' + t.id, zbierzForm(form));

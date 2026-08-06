@@ -1,11 +1,11 @@
 // Roadmapa tygodnia handlowca + pulpit postepow (widok startowy).
 // Zadania tygodnia pogrupowane per temat, z oczekiwanym efektem i podpowiedzia "co dalej".
 // Regula "zawsze nastepny krok": tematy bez otwartego zadania sa wyroznione.
-import { GET, POST } from '../api.js';
-import { el, toast, mln, badge, dataPl } from '../ui.js';
+import { GET, POST, PUT, DEL } from '../api.js';
+import { el, toast, mln, badge, dataPl, modal, pole, zbierzForm } from '../ui.js';
 
 export async function widokRoadmapa(kontener) {
-  const r = await GET('/roadmapa');
+  const [r, cele] = await Promise.all([GET('/roadmapa'), GET('/cele/postep')]);
   const odswiez = () => widokRoadmapa((kontener.innerHTML = '', kontener));
 
   // Grupowanie zadan per temat/lead
@@ -27,6 +27,16 @@ export async function widokRoadmapa(kontener) {
       kafel('Bez ruchu', String(r.postep.liczba_bez_ruchu), 'brak otwartego zadania'),
       kafel('Recykling', String(r.postep.recykling), 'w puli powrotów')),
 
+    // --- Postep w planach (cele sprzedazowe per handlowiec) ---
+    el('div', { class: 'karta-box' },
+      el('div', { class: 'naglowek-akcje' },
+        el('h2', { style: 'margin-top:0' }, '🎯 Postęp w planach (cele sprzedażowe)'),
+        el('button', { class: 'btn btn-maly', onclick: () => formularzCelu(null, odswiez) }, '+ Cel')),
+      cele.length ? el('div', { style: 'display:flex; flex-direction:column; gap:14px' },
+        ...cele.map(c => blokCelu(c, odswiez)))
+        : el('div', { class: 'puste', style: 'padding:12px' },
+          'Brak celów. Dodaj cel na kwartał (np. 2026Q3) — przychód ważony, marża, wygrane, tematy na Komitecie.')),
+
     // --- Alerty: tematy bez ruchu / zastygle ---
     (r.bez_ruchu.length || r.zastygle.length) ? el('div', { style: 'display:grid; grid-template-columns: 1fr 1fr; gap:16px; align-items:start' },
       el('div', { class: 'karta-box' },
@@ -44,6 +54,52 @@ export async function widokRoadmapa(kontener) {
     Object.keys(grupy).length ? el('div', {}, ...Object.values(grupy).map(g => kartaGrupy(g, odswiez)))
       : el('div', { class: 'karta-box puste' }, 'Brak zaplanowanych zadań na ten tydzień. Dodaj zadania z biblioteki na temacie.'),
   );
+}
+
+function blokCelu(c, odswiez) {
+  const pozycje = [
+    ['Przychód ważony', c.przychod_wazony, c.wykonanie.przychod_wazony, 'mln'],
+    ['Marża', c.marza, c.wykonanie.marza, 'mln'],
+    ['Wygrane', c.wygrane, c.wykonanie.wygrane, ''],
+    ['Tematy na Komitecie', c.tematy_komitet, c.wykonanie.tematy_komitet, ''],
+  ].filter(([, plan]) => plan != null && plan !== 0);
+  return el('div', { style: 'border:1px solid var(--linia); border-radius:10px; padding:10px 14px' },
+    el('div', { style: 'display:flex; justify-content:space-between; align-items:center' },
+      el('div', {}, el('b', {}, c.handlowiec), ' ', badge(c.okres, 'nieb')),
+      el('div', { style: 'display:flex; gap:6px' },
+        el('button', { class: 'btn btn-maly', onclick: () => formularzCelu(c, odswiez) }, '✎'),
+        el('button', { class: 'btn btn-maly btn-czerwony', onclick: async () => { await DEL('/cele/' + c.id); toast('Cel usunięty'); odswiez(); } }, '×'))),
+    ...pozycje.map(([nazwa, plan, wyk, jedn]) => {
+      const proc = plan ? Math.min(100, Math.round(100 * (wyk || 0) / plan)) : 0;
+      return el('div', { style: 'display:flex; align-items:center; gap:10px; margin-top:6px' },
+        el('div', { style: 'width:150px; font-size:12px' }, nazwa),
+        el('div', { style: 'flex:1; background:var(--szary-tlo); border-radius:6px; height:18px; overflow:hidden' },
+          el('div', { style: `height:100%; width:${proc}%; background:${proc >= 100 ? 'var(--zielony)' : 'var(--akcent)'}; min-width:2px` })),
+        el('div', { style: 'width:130px; font-size:12px; color:var(--tekst-2); text-align:right' },
+          `${jedn === 'mln' ? mln(wyk || 0) : (wyk || 0)} / ${jedn === 'mln' ? mln(plan) : plan} (${proc}%)`));
+    }));
+}
+
+function formularzCelu(c, odswiez) {
+  const teraz = new Date();
+  const domyslnyOkres = `${teraz.getFullYear()}Q${Math.floor(teraz.getMonth() / 3) + 1}`;
+  const form = el('div', { class: 'form-siatka' },
+    pole({ name: 'okres', label: 'Okres (2026Q3 lub 2026)', wymagane: true, wartosc: c?.okres || domyslnyOkres }),
+    pole({ name: 'handlowiec', label: 'Handlowiec', wymagane: true, wartosc: c?.handlowiec || 'K. Latoś' }),
+    pole({ name: 'przychod_wazony', label: 'Cel: przychód ważony (mln)', typ: 'number', step: '0.1', wartosc: c?.przychod_wazony }),
+    pole({ name: 'marza', label: 'Cel: marża (mln)', typ: 'number', step: '0.1', wartosc: c?.marza }),
+    pole({ name: 'wygrane', label: 'Cel: liczba wygranych', typ: 'number', wartosc: c?.wygrane }),
+    pole({ name: 'tematy_komitet', label: 'Cel: tematy na Komitecie', typ: 'number', wartosc: c?.tematy_komitet }),
+    pole({ name: 'notatka', label: 'Notatka', typ: 'textarea', wartosc: c?.notatka, szerokie: true }));
+  modal(c ? 'Edytuj cel' : 'Nowy cel sprzedażowy', form, [['Zapisz', 'btn-glowny', async () => {
+    const d = zbierzForm(form);
+    if (!d.okres || !d.handlowiec) { toast('Okres i handlowiec są wymagane', true); return false; }
+    try {
+      if (c) await PUT('/cele/' + c.id, d);
+      else await POST('/cele', d);
+      toast('Cel zapisany'); odswiez();
+    } catch (e) { toast(e.message, true); return false; }
+  }]]);
 }
 
 function kafel(etykieta, wartosc, drobne) {

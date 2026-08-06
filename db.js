@@ -323,6 +323,40 @@ CREATE TABLE IF NOT EXISTS powody_zamkniecia (
   offset_powrotu_mies INTEGER DEFAULT 0,
   aktywny INTEGER DEFAULT 1
 );
+
+-- Kryteria kamienia (checklista etapu w stylu Livespace) - TWARDA bramka:
+-- kamien nie do potwierdzenia bez odhaczenia kryteriow obowiazkowych
+CREATE TABLE IF NOT EXISTS kamien_kryteria (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kamien_id INTEGER REFERENCES kamienie_karty(id) ON DELETE CASCADE,
+  tekst TEXT NOT NULL,
+  obowiazkowe INTEGER DEFAULT 1,
+  kolejnosc INTEGER DEFAULT 0,
+  aktywny INTEGER DEFAULT 1
+);
+
+-- Odhaczenia kryteriow per temat
+CREATE TABLE IF NOT EXISTS kryteria_odhaczenia (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  temat_id INTEGER REFERENCES tematy(id) ON DELETE CASCADE,
+  kryterium_id INTEGER REFERENCES kamien_kryteria(id) ON DELETE CASCADE,
+  data TEXT DEFAULT (datetime('now')),
+  kto TEXT,
+  UNIQUE(temat_id, kryterium_id)
+);
+
+-- Cele sprzedazowe per handlowiec i okres (kwartal '2026Q3' lub rok '2026')
+CREATE TABLE IF NOT EXISTS cele (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  okres TEXT NOT NULL,
+  handlowiec TEXT NOT NULL,
+  przychod_wazony REAL,
+  marza REAL,
+  wygrane INTEGER,
+  tematy_komitet INTEGER,
+  notatka TEXT,
+  aktywny INTEGER DEFAULT 1
+);
 `);
 
 // ---------- SEED (tylko przy pustej bazie) ----------
@@ -478,6 +512,8 @@ function seedSlownikJesliBrak(typ, wartosci) {
   dodajKolumne('tematy', 'lead_id', 'INTEGER');
   // Account Management: plan opieki nad kontem powracajacym (data nastepnego przegladu)
   dodajKolumne('klienci', 'data_nastepnego_przegladu', 'TEXT');
+  // Tagi tematow (filtry w kanbanie; CSV w polu tekstowym)
+  dodajKolumne('tematy', 'tagi', 'TEXT');
 
   // Nowe slowniki (tylko jesli brak - nie klobruja edycji uzytkownika)
   seedSlownikJesliBrak('sposob_pozyskania',
@@ -550,6 +586,38 @@ function seedSlownikJesliBrak(typ, wartosci) {
 
 // Seed pipeline v2 (STANDARD M1-M8 + FAST-TRACK F1-F4) - po migracji kolumn
 seedPipeline(db);
+
+// Dezaktywacja starej karty v1 ("Standardowy proces GW"), jesli nieuzywana - zastapiona przez pipeline v2
+const staraKarta = db.prepare(`SELECT id FROM karty_ratingu WHERE kod IS NULL AND nazwa = 'Standardowy proces GW' AND aktywna = 1`).get();
+if (staraKarta && db.prepare('SELECT COUNT(*) c FROM tematy WHERE karta_id = ?').get(staraKarta.id).c === 0) {
+  db.prepare('UPDATE karty_ratingu SET aktywna = 0 WHERE id = ?').run(staraKarta.id);
+}
+
+// Seed kryteriow kamieni (checklista etapu, twarda bramka) - raz, po seedzie pipeline
+if (db.prepare('SELECT COUNT(*) c FROM kamien_kryteria').get().c === 0) {
+  const KRYTERIA = {
+    M1: ['Rozmowa z osobą prowadzącą temat odbyta', 'Plany budowy potwierdzone (nie plotka / stary sygnał)', 'Zgoda na kolejny kontakt'],
+    M2: ['Znany status działki (MPZP/WZ)', 'Budżet potwierdzony widełkowo', 'Znany oczekiwany termin', 'Znana powierzchnia / technologia'],
+    M3: ['Spotkanie z decydentem odbyte', 'Mapa decyzyjna wypełniona (kto decyduje, kto doradza)', 'Znany model wyboru GW (tryb, liczba oferentów)'],
+    M4: ['Znane źródło finansowania i jego etap', 'Decyzja „budujemy" formalnie potwierdzona'],
+    M5: ['Komplet danych do wyceny (brief / PFU)', 'ZOS zarejestrowany', 'Decyzja BID Komitetu Ofertowego'],
+    M6: ['Oferta zaprezentowana na spotkaniu z decydentem', 'Znane kryteria porównania i pozycja vs konkurencja'],
+    M7: ['Shortlista potwierdzona', 'Wizyta referencyjna odbyta (Jasin / realizacja)'],
+    M8: ['Lista rozbieżności kontraktowych zamknięta', 'Brak blokad po stronie finansowania'],
+    WYGRANA: ['Umowa podpisana'],
+    F1: ['Sygnał rozwojowy potwierdzony w rozmowie', 'Horyzont inwestycji <24 mc'],
+    F2: ['Zakres / budżet / termin potwierdzone', 'Intencja kontynuacji potwierdzona przez decydenta', 'Znany tryb (negocjacje 1:1 vs przetarg kontrolny)'],
+    F3: ['Komplet danych do wyceny', 'ZOS zarejestrowany + decyzja BID'],
+    F4: ['Oferta omówiona na spotkaniu', 'Warunki brzegowe uzgodnione'],
+  };
+  const insKryt = db.prepare('INSERT INTO kamien_kryteria (kamien_id, tekst, obowiazkowe, kolejnosc) VALUES (?,?,1,?)');
+  const kamienieV2 = db.prepare(`SELECT km.id, km.kod FROM kamienie_karty km
+    JOIN karty_ratingu kr ON kr.id = km.karta_id WHERE kr.kod IN ('STANDARD','FAST_TRACK')`).all();
+  for (const km of kamienieV2) {
+    // WYGRANA w FAST-TRACK tez dostaje kryterium umowy
+    (KRYTERIA[km.kod] || []).forEach((tekst, i) => insKryt.run(km.id, tekst, i));
+  }
+}
 
 // ---------- SEED pytan kwalifikacji wstepnej (5-7 pytan strategicznych) ----------
 if (db.prepare('SELECT COUNT(*) c FROM pytania_kwalifikacji').get().c === 0) {
