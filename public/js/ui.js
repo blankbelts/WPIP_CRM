@@ -107,6 +107,50 @@ export function pasekPrawd(p) {
   return el('div', { class: 'pasek', title: p + '%' }, el('div', { style: `width:${p}%` }));
 }
 
+// Awatar z inicjalami (np. "K. Latoś" -> KL); kolor deterministyczny z nazwy
+export function awatar(nazwa) {
+  const n = String(nazwa || '?').trim();
+  const inicjaly = n.split(/[\s.]+/).filter(Boolean).slice(0, 2).map(s => s[0].toUpperCase()).join('') || '?';
+  const KOLORY = ['#1f3a5c', '#3d6fd0', '#0f766e', '#7c3aed', '#b45309', '#be185d'];
+  let h = 0; for (const c of n) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return el('span', { class: 'awatar', title: n, style: `background:${KOLORY[h % KOLORY.length]}` }, inicjaly);
+}
+
+// Przelacznik on/off (Livespace-style toggle)
+export function przelacznik(checked, onZmiana, disabled = false) {
+  const input = el('input', { type: 'checkbox', disabled });
+  input.checked = !!checked;
+  if (onZmiana) input.addEventListener('change', () => onZmiana(input.checked));
+  return el('label', { class: 'przelacznik', onclick: (e) => e.stopPropagation() }, input, el('span', { class: 'tor' }));
+}
+
+// Pierscien postepu (donut SVG) - procent 0-100+, pelny (>=100) na zielono
+export function ring(procent, rozmiar = 64, etykieta = null) {
+  const rzeczywisty = Math.max(0, Math.round(procent));
+  const p = Math.min(150, rzeczywisty);
+  if (etykieta === null) etykieta = rzeczywisty + '%';
+  const r = (rozmiar - 8) / 2, obw = 2 * Math.PI * r;
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('width', rozmiar); svg.setAttribute('height', rozmiar);
+  svg.setAttribute('viewBox', `0 0 ${rozmiar} ${rozmiar}`);
+  svg.classList.add('ring');
+  const c = rozmiar / 2;
+  svg.innerHTML = `
+    <circle class="ring-tlo" cx="${c}" cy="${c}" r="${r}" fill="none" stroke-width="6"/>
+    <circle class="ring-wart${p >= 100 ? ' pelny' : ''}" cx="${c}" cy="${c}" r="${r}" fill="none" stroke-width="6"
+      stroke-linecap="round" stroke-dasharray="${obw}" stroke-dashoffset="${obw * (1 - Math.min(p, 100) / 100)}"
+      transform="rotate(-90 ${c} ${c})"/>
+    <text x="${c}" y="${c + 4}" text-anchor="middle" font-size="${rozmiar / 4.6}">${etykieta ?? p + '%'}</text>`;
+  return svg;
+}
+
+// Segmentowany wskaznik etapu na karcie (ile kamieni zaliczonych z ilu)
+export function segmenty(zaliczone, aktualnyIdx, total) {
+  return el('div', { class: 'segmenty', title: `etap ${aktualnyIdx + 1} z ${total}` },
+    ...Array.from({ length: total }, (_, i) =>
+      el('span', { class: i < zaliczone ? 'zaliczony' : (i === aktualnyIdx ? 'aktualny' : '') })));
+}
+
 export function tabela(kolumny, wiersze, onKlik) {
   if (!wiersze.length) return el('div', { class: 'puste' }, 'Brak danych do wyświetlenia');
   return el('table', {},

@@ -1,6 +1,7 @@
 // Pulpit - KPI, pipeline wg kamieni, przychod kwartalny, zadania tygodnia
 import { GET } from '../api.js';
 import { el, mln, pct, dataPl, badgePriorytet, badgeStatus, tabela } from '../ui.js';
+import { ikona } from '../ikony.js';
 
 export async function widokPulpit(kontener) {
   const d = await GET('/dashboard');
@@ -13,11 +14,11 @@ export async function widokPulpit(kontener) {
     el('p', { class: 'podtytul' }, 'New Business: od sygnału inwestycyjnego do wygranego kontraktu · baseline 2025: 192 leady → 57 ofert → 14 wygranych (356 mln PLN), win rate 25%, śr. kontrakt 25 mln'),
 
     el('div', { class: 'kafle' },
-      kafel('Wartość pipeline', mln(d.wartosc_pipeline) + ' PLN', `${d.tematy_otwarte} tematów otwartych`),
-      kafel('Pipeline ważony', mln(d.wartosc_wazona) + ' PLN', 'suma wartość × prawdopodobieństwo'),
-      kafel('Win rate', d.win_rate === null ? '—' : d.win_rate + '%', `${d.wygrane} wygranych / ${d.przegrane} przegranych (baseline 2025: 25%)`),
-      kafel('Leady priorytet A', prio.A || 0, `B: ${prio.B || 0} · C: ${prio.C || 0} · D: ${prio.D || 0} · X: ${prio.X || 0}`),
-      kafel('Kolejka Komitetu', d.kolejka_komitetu, `bid: ${dec.bid || 0} · no bid: ${dec.no_bid || 0} · defer: ${dec.defer || 0}`),
+      kafel('Wartość pipeline', mln(d.wartosc_pipeline) + ' PLN', `${d.tematy_otwarte} tematów otwartych`, 'pipeline', 'nieb'),
+      kafel('Pipeline ważony', mln(d.wartosc_wazona) + ' PLN', 'suma wartość × prawdopodobieństwo', 'waga'),
+      kafel('Win rate', d.win_rate === null ? '—' : d.win_rate + '%', `${d.wygrane} wygranych / ${d.przegrane} przegranych (baseline 2025: 25%)`, 'cel', 'ziel'),
+      kafel('Leady priorytet A', prio.A || 0, `B: ${prio.B || 0} · C: ${prio.C || 0} · D: ${prio.D || 0} · X: ${prio.X || 0}`, 'ogien'),
+      kafel('Kolejka Komitetu', d.kolejka_komitetu, `bid: ${dec.bid || 0} · no bid: ${dec.no_bid || 0} · defer: ${dec.defer || 0}`, 'komitet', 'nieb'),
     ),
 
     el('div', { style: 'display:grid; grid-template-columns: 1fr 1fr; gap:18px; align-items:start;' },
@@ -33,7 +34,7 @@ export async function widokPulpit(kontener) {
         el('h2', { style: 'margin-top:0' }, 'Przychód po kwartałach (mln PLN)'),
         d.kwartaly.length ? wykresKwartaly(d.kwartaly) : el('div', { class: 'puste' }, 'Uzupełnij terminy realizacji i czas trwania tematów, aby zobaczyć rozkład'),
         el('div', { class: 'legenda' },
-          el('span', {}, el('span', { class: 'kropka', style: 'background:#c7d4e4' }), 'planowany'),
+          el('span', {}, el('span', { class: 'kropka', style: 'background:#3d6fd0' }), 'planowany'),
           el('span', {}, el('span', { class: 'kropka', style: 'background:var(--akcent)' }), 'ważony prawdopodobieństwem'))),
     ),
 
@@ -49,8 +50,9 @@ export async function widokPulpit(kontener) {
   );
 }
 
-function kafel(etykieta, wartosc, drobne) {
+function kafel(etykieta, wartosc, drobne, ikonaNazwa, odcien = '') {
   return el('div', { class: 'kafel' },
+    ikonaNazwa ? el('div', { class: 'ikona-tlo ' + odcien }, ikona(ikonaNazwa, 18)) : null,
     el('div', { class: 'etykieta' }, etykieta),
     el('div', { class: 'wartosc' }, String(wartosc)),
     drobne ? el('div', { class: 'drobne' }, drobne) : null);

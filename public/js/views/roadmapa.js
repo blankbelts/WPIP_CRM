@@ -2,7 +2,8 @@
 // Zadania tygodnia pogrupowane per temat, z oczekiwanym efektem i podpowiedzia "co dalej".
 // Regula "zawsze nastepny krok": tematy bez otwartego zadania sa wyroznione.
 import { GET, POST, PUT, DEL } from '../api.js';
-import { el, toast, mln, badge, dataPl, modal, pole, zbierzForm } from '../ui.js';
+import { el, toast, mln, badge, dataPl, modal, pole, zbierzForm, ring, awatar } from '../ui.js';
+import { ikona, IKONA_TYPU_DZIALANIA } from '../ikony.js';
 
 export async function widokRoadmapa(kontener) {
   const [r, cele] = await Promise.all([GET('/roadmapa'), GET('/cele/postep')]);
@@ -21,11 +22,11 @@ export async function widokRoadmapa(kontener) {
 
     // --- Pulpit postepow ---
     el('div', { class: 'kafle' },
-      kafel('Tematy otwarte', String(r.postep.tematy_otwarte)),
-      kafel('Wartość ważona', mln(r.postep.wartosc_wazona) + ' PLN', 'suma wartość × prawdopodobieństwo'),
-      kafel('Zastygłe', String(r.postep.liczba_zastygle), 'przekroczony próg czasu w etapie'),
-      kafel('Bez ruchu', String(r.postep.liczba_bez_ruchu), 'brak otwartego zadania'),
-      kafel('Recykling', String(r.postep.recykling), 'w puli powrotów')),
+      kafel('Tematy otwarte', String(r.postep.tematy_otwarte), null, 'pipeline', 'nieb'),
+      kafel('Wartość ważona', mln(r.postep.wartosc_wazona) + ' PLN', 'suma wartość × prawdopodobieństwo', 'waga'),
+      kafel('Zastygłe', String(r.postep.liczba_zastygle), 'przekroczony próg czasu w etapie', 'zegar', 'zol'),
+      kafel('Bez ruchu', String(r.postep.liczba_bez_ruchu), 'brak otwartego zadania', 'alert', 'zol'),
+      kafel('Recykling', String(r.postep.recykling), 'w puli powrotów', 'recykling', 'ziel')),
 
     // --- Postep w planach (cele sprzedazowe per handlowiec) ---
     el('div', { class: 'karta-box' },
@@ -57,27 +58,29 @@ export async function widokRoadmapa(kontener) {
 }
 
 function blokCelu(c, odswiez) {
+  // Ringi postepu per miara (Livespace-style) + awatar handlowca
   const pozycje = [
     ['Przychód ważony', c.przychod_wazony, c.wykonanie.przychod_wazony, 'mln'],
     ['Marża', c.marza, c.wykonanie.marza, 'mln'],
     ['Wygrane', c.wygrane, c.wykonanie.wygrane, ''],
-    ['Tematy na Komitecie', c.tematy_komitet, c.wykonanie.tematy_komitet, ''],
+    ['Komitety', c.tematy_komitet, c.wykonanie.tematy_komitet, ''],
   ].filter(([, plan]) => plan != null && plan !== 0);
-  return el('div', { style: 'border:1px solid var(--linia); border-radius:10px; padding:10px 14px' },
-    el('div', { style: 'display:flex; justify-content:space-between; align-items:center' },
-      el('div', {}, el('b', {}, c.handlowiec), ' ', badge(c.okres, 'nieb')),
+  return el('div', { style: 'border:1px solid var(--linia); border-radius:10px; padding:12px 14px' },
+    el('div', { style: 'display:flex; justify-content:space-between; align-items:center; margin-bottom:8px' },
+      el('div', { style: 'display:flex; align-items:center; gap:8px' },
+        awatar(c.handlowiec), el('b', {}, c.handlowiec), badge(c.okres, 'nieb')),
       el('div', { style: 'display:flex; gap:6px' },
-        el('button', { class: 'btn btn-maly', onclick: () => formularzCelu(c, odswiez) }, '✎'),
-        el('button', { class: 'btn btn-maly btn-czerwony', onclick: async () => { await DEL('/cele/' + c.id); toast('Cel usunięty'); odswiez(); } }, '×'))),
-    ...pozycje.map(([nazwa, plan, wyk, jedn]) => {
-      const proc = plan ? Math.min(100, Math.round(100 * (wyk || 0) / plan)) : 0;
-      return el('div', { style: 'display:flex; align-items:center; gap:10px; margin-top:6px' },
-        el('div', { style: 'width:150px; font-size:12px' }, nazwa),
-        el('div', { style: 'flex:1; background:var(--szary-tlo); border-radius:6px; height:18px; overflow:hidden' },
-          el('div', { style: `height:100%; width:${proc}%; background:${proc >= 100 ? 'var(--zielony)' : 'var(--akcent)'}; min-width:2px` })),
-        el('div', { style: 'width:130px; font-size:12px; color:var(--tekst-2); text-align:right' },
-          `${jedn === 'mln' ? mln(wyk || 0) : (wyk || 0)} / ${jedn === 'mln' ? mln(plan) : plan} (${proc}%)`));
-    }));
+        el('button', { class: 'btn btn-maly', onclick: () => formularzCelu(c, odswiez) }, ikona('edytuj', 13)),
+        el('button', { class: 'btn btn-maly btn-czerwony', onclick: async () => { await DEL('/cele/' + c.id); toast('Cel usunięty'); odswiez(); } }, ikona('x', 13)))),
+    el('div', { style: 'display:flex; gap:22px; flex-wrap:wrap' },
+      ...pozycje.map(([nazwa, plan, wyk, jedn]) => {
+        const proc = plan ? Math.round(100 * (wyk || 0) / plan) : 0;
+        return el('div', { style: 'display:flex; flex-direction:column; align-items:center; gap:4px' },
+          ring(proc, 64),
+          el('div', { style: 'font-size:12px; font-weight:600' }, nazwa),
+          el('div', { style: 'font-size:11px; color:var(--tekst-2)' },
+            `${jedn === 'mln' ? mln(wyk || 0) : (wyk || 0)} / ${jedn === 'mln' ? mln(plan) : plan}`));
+      })));
 }
 
 function formularzCelu(c, odswiez) {
@@ -102,8 +105,9 @@ function formularzCelu(c, odswiez) {
   }]]);
 }
 
-function kafel(etykieta, wartosc, drobne) {
+function kafel(etykieta, wartosc, drobne, ikonaNazwa, odcien = '') {
   return el('div', { class: 'kafel' },
+    ikonaNazwa ? el('div', { class: 'ikona-tlo ' + odcien }, ikona(ikonaNazwa, 18)) : null,
     el('div', { class: 'etykieta' }, etykieta),
     el('div', { class: 'wartosc' }, wartosc),
     drobne ? el('div', { class: 'drobne' }, drobne) : null);
@@ -144,9 +148,12 @@ function zadanieWiersz(z, odswiez) {
         } catch (err) { toast(err.message, true); }
       }
     }, w)));
+  const ikonaTypu = z.typ ? ikona(IKONA_TYPU_DZIALANIA[String(z.typ).toLowerCase()] || 'dzialania', 15) : null;
   return el('div', { style: 'display:flex; justify-content:space-between; align-items:flex-start; gap:12px; padding:8px 0; border-bottom:1px solid var(--linia)' },
-    el('div', {},
-      el('div', {}, z.kamien_kod ? badge(z.kamien_kod, 'akcent') : '', ' ', z.typ ? el('span', { style: 'color:var(--tekst-2); font-size:12px' }, z.typ + ' · ') : '', z.termin ? el('span', { style: 'color:var(--tekst-2); font-size:12px' }, dataPl(z.termin)) : '',
-        el('div', { style: 'font-weight:600; margin-top:2px' }, z.cel), efekt)),
+    el('div', { style: 'display:flex; gap:10px; align-items:flex-start' },
+      el('div', { style: 'color:var(--akcent); padding-top:2px' }, ikonaTypu || ikona('dzialania', 15)),
+      el('div', {},
+        el('div', {}, z.kamien_kod ? badge(z.kamien_kod, 'akcent') : '', ' ', z.typ ? el('span', { style: 'color:var(--tekst-2); font-size:12px' }, z.typ + ' · ') : '', z.termin ? el('span', { style: 'color:var(--tekst-2); font-size:12px' }, dataPl(z.termin)) : '',
+          el('div', { style: 'font-weight:600; margin-top:2px' }, z.cel), efekt))),
     przyciski);
 }

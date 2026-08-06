@@ -29,7 +29,7 @@ export async function widokPrognoza(kontener) {
       p.kwartaly.length ? el('div', {},
         wykresKwartaly(p.kwartaly),
         el('div', { class: 'legenda' },
-          el('span', {}, el('span', { class: 'kropka', style: 'background:#c7d4e4' }), 'planowany (100%)'),
+          el('span', {}, el('span', { class: 'kropka', style: 'background:#3d6fd0' }), 'planowany (100%)'),
           el('span', {}, el('span', { class: 'kropka', style: 'background:var(--akcent)' }), 'ważony prawdopodobieństwem')),
         el('table', { style: 'margin-top:14px' },
           el('thead', {}, el('tr', {}, el('th', {}, 'Kwartał'), el('th', { class: 'liczba' }, 'Planowany'), el('th', { class: 'liczba' }, 'Ważony'))),
@@ -74,7 +74,7 @@ function lejek(etapy) {
       return el('div', { style: 'display:flex; align-items:center; gap:12px' },
         el('div', { style: 'width:190px; font-size:13px; flex-shrink:0' }, e.etap),
         el('div', { style: 'flex:1; background:var(--szary-tlo); border-radius:6px; overflow:hidden; height:26px; position:relative' },
-          el('div', { style: `height:100%; width:${Math.max(3, Math.round(100 * e.liczba / max))}%; background:linear-gradient(90deg, var(--granat), var(--granat-2)); display:flex; align-items:center; padding-left:8px; color:#fff; font-weight:700; font-size:13px` }, String(e.liczba))),
+          el('div', { class: 'slupek-h', style: `height:100%; width:${Math.max(3, Math.round(100 * e.liczba / max))}%; background:#3d6fd0; display:flex; align-items:center; padding-left:8px; color:#fff; font-weight:700; font-size:13px` }, String(e.liczba))),
         el('div', { style: 'width:70px; font-size:12px; color:var(--tekst-2); text-align:right; flex-shrink:0' }, konw !== null ? `${konw}%` : ''));
     }));
 }

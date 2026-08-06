@@ -17,6 +17,20 @@ import { widokPrognoza } from './views/prognoza.js';
 import { widokDzialania } from './views/dzialania.js';
 import { widokUstawienia } from './views/ustawienia.js';
 import { toast } from './ui.js';
+import { ikona } from './ikony.js';
+
+// Ikony nawigacji (mapowanie data-nav -> nazwa ikony)
+const IKONY_NAV = {
+  '/': 'roadmapa', '/pulpit': 'pulpit', '/import': 'import', '/leady': 'leady',
+  '/scoring': 'scoring', '/komitet': 'komitet', '/pipeline': 'pipeline',
+  '/import-pipeline': 'import', '/recykling': 'recykling', '/prognoza': 'prognoza',
+  '/metryki': 'metryki', '/raporty': 'raporty', '/klienci': 'klienci',
+  '/partnerzy': 'partnerzy', '/dzialania': 'dzialania', '/lejki': 'lejki', '/ustawienia': 'ustawienia',
+};
+for (const a of document.querySelectorAll('[data-nav]')) {
+  const nazwa = IKONY_NAV[a.dataset.nav];
+  if (nazwa) a.prepend(ikona(nazwa, 17));
+}
 
 // Widok dostaje (kontener, ...grupy regex, query string)
 const trasy = [

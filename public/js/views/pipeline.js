@@ -2,7 +2,8 @@
 // Awans wylacznie przez potwierdzenie kamienia z dowodem (fakt po stronie klienta).
 // Prawdopodobienstwo = ciagly potwierdzony prefiks. Biblioteka zadan per kamien.
 import { GET, POST, PUT, slowniki, karty } from '../api.js';
-import { el, modal, pole, zbierzForm, toast, tabela, badgeStatus, badge, dataPl, mln, pct, pasekPrawd } from '../ui.js';
+import { el, modal, pole, zbierzForm, toast, tabela, badgeStatus, badge, dataPl, mln, pct, pasekPrawd, awatar, segmenty } from '../ui.js';
+import { ikona } from '../ikony.js';
 import { formularzDzialania, listaDzialan } from './dzialania.js';
 
 export async function widokPipeline(kontener) {
@@ -37,10 +38,12 @@ export async function widokPipeline(kontener) {
       boardBox.append(el('div', {},
         pipeliny.length > 1 ? el('h2', {}, karta.nazwa) : '',
         el('div', { class: 'kanban' },
-          ...kamienieKarty.map(km => {
+          ...kamienieKarty.map((km, kmIdx) => {
             const wKol = otwarte.filter(t => t.kamien_id === km.id);
             const suma = wKol.reduce((s, t) => s + (t.wartosc_kontraktu || 0), 0);
-            const kolumna = el('div', { class: 'kanban-kolumna' },
+            const n = kamienieKarty.length;
+            const poz = kmIdx === n - 1 ? 'final' : kmIdx >= n * 0.66 ? 'koniec' : kmIdx >= n * 0.33 ? 'srodek' : 'start';
+            const kolumna = el('div', { class: 'kanban-kolumna', 'data-poz': poz },
               el('div', { class: 'kanban-naglowek' },
                 el('span', {}, km.kod || km.nazwa.slice(0, 14)),
                 el('span', { title: km.nazwa }, `${wKol.length}${suma ? ' · ' + mln(suma) : ''}`)),
@@ -61,20 +64,25 @@ export async function widokPipeline(kontener) {
   }
 
   function kartaTematuKanban(t) {
+    const kartaLejka = listaKart.find(k => k.id === t.karta_id);
+    const total = kartaLejka?.kamienie?.length || 0;
+    const aktIdx = (t.kamien_kolejnosc || 1) - 1;
     const karta = el('div', {
       class: 'kanban-karta', draggable: 'true',
       style: (t.zastygly ? 'border-left-color:var(--zolty);' : '') + 'cursor:grab;',
       onclick: () => location.hash = '#/tematy/' + t.id
     },
-      el('div', { class: 'kk-id' }, t.identyfikator),
+      el('div', { style: 'display:flex; justify-content:space-between; align-items:center; gap:6px' },
+        el('div', { class: 'kk-id' }, t.identyfikator),
+        t.handlowiec ? awatar(t.handlowiec) : ''),
       el('div', { class: 'kk-info' },
         el('span', {}, t.klient_nazwa || '—'),
-        el('span', {}, t.wartosc_kontraktu ? mln(t.wartosc_kontraktu) : '—')),
+        el('span', { style: 'font-weight:700; color:var(--tekst)' }, t.wartosc_kontraktu ? mln(t.wartosc_kontraktu) : '—')),
       el('div', { class: 'kk-info' },
         el('span', {}, pct(t.prawdopodobienstwo)),
         el('span', { style: t.zastygly ? 'color:var(--zolty); font-weight:700' : 'color:var(--tekst-2)' },
-          `${t.dni_w_etapie} dni${t.zastygly ? ' 🕒' : ''}`)),
-      el('div', { style: 'margin-top:6px' }, pasekPrawd(t.prawdopodobienstwo)),
+          t.zastygly ? [ikona('zegar', 12), ` ${t.dni_w_etapie} dni`] : `${t.dni_w_etapie} dni`)),
+      total ? segmenty(aktIdx, aktIdx, total) : el('div', { style: 'margin-top:6px' }, pasekPrawd(t.prawdopodobienstwo)),
       (t.tagi || '').trim() ? el('div', { class: 'kk-info', style: 'margin-top:4px' },
         el('span', {}, ...(t.tagi || '').split(',').map(s => s.trim()).filter(Boolean).slice(0, 3)
           .map(tag => el('span', { class: 'badge badge-szary', style: 'margin-right:4px' }, tag)))) : '',

@@ -1,7 +1,7 @@
 // Ustawienia - karty ratingu pipeline'u + slowniki (edytowalne przez biznes, bez programisty)
 // Scoring leadow (wersje, wagi, progi) ma wlasna zakladke: #/scoring
 import { GET, POST, PUT, DEL, karty, invalidateCache } from '../api.js';
-import { el, modal, pole, zbierzForm, toast, tabela } from '../ui.js';
+import { el, modal, pole, zbierzForm, toast, tabela, przelacznik } from '../ui.js';
 
 const NAZWY_SLOWNIKOW = {
   powod_odpuszczenia: 'Powody odpuszczenia (leady / bramka / Komitet)',
@@ -58,12 +58,11 @@ export async function widokUstawienia(kontener) {
         { naglowek: '#', klasa: 'wysrodkuj', render: p => String(p.kolejnosc + 1) },
         { naglowek: 'Pytanie', render: p => p.tekst },
         {
-          naglowek: 'Dyskwalifikujące', klasa: 'wysrodkuj', render: p => {
-            const chk = el('input', { type: 'checkbox' });
-            chk.checked = !!p.dyskwalifikujace;
-            chk.addEventListener('change', async () => { await PUT('/pytania-kwalifikacji/' + p.id, { dyskwalifikujace: chk.checked ? 1 : 0 }); toast('Zapisano'); });
-            return chk;
-          }
+          naglowek: 'Dyskwalifikujące', klasa: 'wysrodkuj', render: p =>
+            przelacznik(!!p.dyskwalifikujace, async (v) => {
+              await PUT('/pytania-kwalifikacji/' + p.id, { dyskwalifikujace: v ? 1 : 0 });
+              toast('Zapisano');
+            })
         },
         {
           naglowek: '', klasa: 'wysrodkuj', render: p => el('button', {

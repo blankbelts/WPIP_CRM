@@ -41,9 +41,12 @@ body {
 .logo span { color: var(--akcent-jasny); }
 .nav-sekcja { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #7f93ad; padding: 14px 10px 6px; }
 .sidebar a {
-  display: block; color: #cbd5e1; text-decoration: none;
+  display: flex; align-items: center; gap: 10px;
+  color: #cbd5e1; text-decoration: none;
   padding: 8px 10px; border-radius: 8px; margin-bottom: 2px;
 }
+.sidebar a .ikona { flex-shrink: 0; opacity: .8; }
+.sidebar a.aktywny .ikona { opacity: 1; }
 .sidebar a:hover { background: var(--granat-2); color: #fff; }
 .sidebar a.aktywny { background: var(--akcent); color: #fff; font-weight: 600; }
 .sidebar-stopka { margin-top: auto; font-size: 11px; color: #7f93ad; padding: 10px; line-height: 1.5; }
@@ -157,7 +160,7 @@ textarea { resize: vertical; min-height: 60px; }
 .wykres-kw .slupek-grupa { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px; height: 100%; justify-content: flex-end; }
 .wykres-kw .slupki { display: flex; gap: 3px; align-items: flex-end; height: 100%; width: 100%; justify-content: center; }
 .wykres-kw .slupek { width: 26px; border-radius: 4px 4px 0 0; min-height: 2px; }
-.wykres-kw .slupek.plan { background: #c7d4e4; }
+.wykres-kw .slupek.plan { background: #3d6fd0; }
 .wykres-kw .slupek.wazony { background: var(--akcent); }
 .wykres-kw .podpis { font-size: 11px; color: var(--tekst-2); white-space: nowrap; }
 .legenda { display: flex; gap: 16px; font-size: 12px; color: var(--tekst-2); margin-top: 8px; }
@@ -179,6 +182,73 @@ textarea { resize: vertical; min-height: 60px; }
 .uzytkownik-info .wyloguj-link:hover { text-decoration: underline; }
 
 .puste { text-align: center; color: var(--tekst-2); padding: 34px 10px; }
+
+/* --- Ikony --- */
+.ikona { vertical-align: -3px; }
+.btn .ikona { vertical-align: -2px; }
+.kafel .ikona-tlo {
+  width: 34px; height: 34px; border-radius: 9px; display: flex; align-items: center; justify-content: center;
+  background: #fdeade; color: var(--akcent); margin-bottom: 8px;
+}
+.kafel .ikona-tlo.nieb { background: #e3ecfb; color: #3d6fd0; }
+.kafel .ikona-tlo.ziel { background: var(--zielony-tlo); color: var(--zielony); }
+.kafel .ikona-tlo.zol { background: var(--zolty-tlo); color: var(--zolty); }
+
+/* --- Przelacznik (toggle) --- */
+.przelacznik { position: relative; display: inline-block; width: 38px; height: 22px; flex-shrink: 0; cursor: pointer; }
+.przelacznik input { opacity: 0; width: 0; height: 0; }
+.przelacznik .tor {
+  position: absolute; inset: 0; background: #cbd5e1; border-radius: 22px; transition: background .15s;
+}
+.przelacznik .tor::before {
+  content: ''; position: absolute; width: 16px; height: 16px; border-radius: 50%;
+  background: #fff; top: 3px; left: 3px; transition: transform .15s; box-shadow: 0 1px 2px rgba(0,0,0,.2);
+}
+.przelacznik input:checked + .tor { background: var(--akcent); }
+.przelacznik input:checked + .tor::before { transform: translateX(16px); }
+.przelacznik input:disabled + .tor { opacity: .5; cursor: not-allowed; }
+
+/* --- Awatar z inicjalami --- */
+.awatar {
+  width: 24px; height: 24px; border-radius: 50%; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 700; color: #fff; background: var(--granat-2);
+  border: 1.5px solid #fff; box-shadow: 0 0 0 1px var(--linia);
+}
+
+/* --- Pierscien postepu (SVG donut) --- */
+.ring { display: inline-block; }
+.ring .ring-tlo { stroke: var(--szary-tlo); }
+.ring .ring-wart { stroke: var(--akcent); transition: stroke-dashoffset .3s; }
+.ring .ring-wart.pelny { stroke: var(--zielony); }
+.ring text { fill: var(--tekst); font-weight: 700; }
+
+/* --- Segmentowany wskaznik etapu (Livespace-style) --- */
+.segmenty { display: flex; gap: 3px; margin-top: 6px; }
+.segmenty span { flex: 1; height: 5px; border-radius: 3px; background: var(--szary-tlo); }
+.segmenty span.zaliczony { background: var(--akcent); }
+.segmenty span.aktualny { background: var(--granat-2); }
+
+/* --- Kanban: akcent kolumny wg pozycji --- */
+.kanban-kolumna { border-top: 3px solid transparent; }
+.kanban-kolumna[data-poz="start"] { border-top-color: #94a8c4; }
+.kanban-kolumna[data-poz="srodek"] { border-top-color: #3d6fd0; }
+.kanban-kolumna[data-poz="koniec"] { border-top-color: var(--akcent); }
+.kanban-kolumna[data-poz="final"] { border-top-color: var(--zielony); }
+
+/* --- Wykresy: slupki z tooltipem --- */
+.wykres-tooltip { position: relative; }
+.wykres-tooltip .tip {
+  display: none; position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%);
+  background: var(--granat); color: #fff; font-size: 11px; padding: 5px 9px; border-radius: 6px;
+  white-space: nowrap; z-index: 30; pointer-events: none; box-shadow: var(--cien);
+}
+.wykres-tooltip:hover .tip { display: block; }
+.slupek-h { border-radius: 0 4px 4px 0; }
+.wykres-kw .slupek { border-radius: 4px 4px 0 0; }
+
+/* --- Naglowki sekcji z ikona --- */
+h2 .ikona { color: var(--akcent); margin-right: 6px; }
 .link { color: var(--nieb); cursor: pointer; text-decoration: underline; }
 .ostrzezenie { background: var(--zolty-tlo); color: var(--zolty); border-radius: 8px; padding: 8px 12px; font-size: 12px; margin: 8px 0; }
 .info-box { background: var(--nieb-tlo); color: var(--nieb); border-radius: 8px; padding: 8px 12px; font-size: 12px; margin: 8px 0; }

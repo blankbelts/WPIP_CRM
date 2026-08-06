@@ -1,7 +1,8 @@
 // Edytor lejkow sprzedazy (zarzadzanie jak w Livespace): lejki -> kamienie-fakty ->
 // kryteria (checklista, twarda bramka) + biblioteka zadan + powody zamkniecia. Wszystko jako dane.
 import { GET, POST, PUT, DEL, invalidateCache } from '../api.js';
-import { el, modal, pole, zbierzForm, toast, tabela, badge } from '../ui.js';
+import { el, modal, pole, zbierzForm, toast, tabela, badge, przelacznik } from '../ui.js';
+import { ikona } from '../ikony.js';
 
 export async function widokLejki(kontener) {
   const lejki = await GET('/lejki');
@@ -68,9 +69,12 @@ function sekcjaSzczegolow(km, odswiez) {
     // Kryteria (twarda checklista)
     el('div', {},
       el('h2', { style: 'font-size:13px; margin:0 0 6px' }, 'Kryteria (checklista — twarda bramka)'),
-      ...km.kryteria.map(kr => el('div', { style: 'display:flex; justify-content:space-between; gap:8px; padding:4px 0; border-bottom:1px solid var(--linia); font-size:13px' },
+      ...km.kryteria.map(kr => el('div', { style: 'display:flex; justify-content:space-between; align-items:center; gap:8px; padding:4px 0; border-bottom:1px solid var(--linia); font-size:13px' },
         el('span', {}, kr.obowiazkowe ? el('b', { style: 'color:var(--czerwony)' }, '* ') : '', kr.tekst),
-        el('button', { class: 'btn btn-maly btn-czerwony', onclick: async () => { await DEL('/kryteria/' + kr.id); toast('Usunięto'); odswiez(); } }, '×'))),
+        el('div', { style: 'display:flex; gap:8px; align-items:center; flex-shrink:0' },
+          el('span', { title: 'obowiązkowe — blokuje potwierdzenie kamienia' },
+            przelacznik(!!kr.obowiazkowe, async (v) => { await PUT('/kryteria/' + kr.id, { obowiazkowe: v ? 1 : 0 }); toast('Zapisano'); odswiez(); })),
+          el('button', { class: 'btn btn-maly btn-czerwony', onclick: async () => { await DEL('/kryteria/' + kr.id); toast('Usunięto'); odswiez(); } }, ikona('x', 12))))),
       el('button', {
         class: 'btn btn-maly', style: 'margin-top:6px', onclick: () => {
           const form = el('div', { class: 'form-siatka' },
