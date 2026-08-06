@@ -102,8 +102,8 @@ function pokazLogowanie() {
   root.innerHTML = `
     <div class="login-ekran">
       <form class="login-karta" id="login-form">
-        <div class="logo" style="padding:0 0 6px">WPIP <span>CRM</span></div>
-        <p style="color:var(--tekst-2); margin:0 0 16px">Zaloguj się, aby kontynuować</p>
+        <div class="logo" style="padding:0 0 6px"><img src="/img/logo-wpip.svg" alt="Grupa WPIP"></div>
+        <p style="color:var(--tekst-2); margin:0 0 16px">CRM New Business — zaloguj się, aby kontynuować</p>
         <div class="pole"><label>Login</label><input name="login" autocomplete="username" autofocus></div>
         <div style="height:10px"></div>
         <div class="pole"><label>Hasło</label><input name="haslo" type="password" autocomplete="current-password"></div>

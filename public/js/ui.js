@@ -111,7 +111,7 @@ export function pasekPrawd(p) {
 export function awatar(nazwa) {
   const n = String(nazwa || '?').trim();
   const inicjaly = n.split(/[\s.]+/).filter(Boolean).slice(0, 2).map(s => s[0].toUpperCase()).join('') || '?';
-  const KOLORY = ['#1f3a5c', '#3d6fd0', '#0f766e', '#7c3aed', '#b45309', '#be185d'];
+  const KOLORY = ['#4e4e50', '#3d6fd0', '#0f766e', '#7c3aed', '#b45309', '#be185d'];
   let h = 0; for (const c of n) h = (h * 31 + c.charCodeAt(0)) >>> 0;
   return el('span', { class: 'awatar', title: n, style: `background:${KOLORY[h % KOLORY.length]}` }, inicjaly);
 }
