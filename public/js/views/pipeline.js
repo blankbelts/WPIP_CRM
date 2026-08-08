@@ -166,8 +166,8 @@ export async function widokTemat(kontener, id) {
           `${t.klient_nazwa || ''} · ${t.karta_nazwa} · kamień ${t.kamien_kod || ''}: ${t.kamien_nazwa} · prawdopodobieństwo wygranej ${t.prawdopodobienstwo}%`)),
       el('div', { style: 'display:flex; gap:8px; flex-wrap:wrap;' },
         el('button', { class: 'btn', onclick: () => formularzTematu(t, sl, odswiez) }, 'Edytuj dane'),
-        otwarty && t.pipeline_kod === 'FAST_TRACK' && t.kamien_kod === 'F2'
-          ? el('button', { class: 'btn', onclick: () => przeniesStandard(t, odswiez) }, '↦ Przenieś do STANDARD (M5)') : '',
+        otwarty
+          ? el('button', { class: 'btn', onclick: () => przeniesStandard(t, odswiez) }, '↦ Zmień ścieżkę procesu') : '',
         otwarty ? el('button', { class: 'btn btn-czerwony', onclick: () => zamknijTemat(t, odswiez) }, 'Zamknij temat') :
           el('button', { class: 'btn', onclick: async () => { await POST(`/tematy/${id}/otworz`); toast('Temat otwarty ponownie'); odswiez(); } }, 'Otwórz ponownie'))),
 
@@ -384,15 +384,25 @@ async function zamknijTemat(t, poZapisie) {
   }]]);
 }
 
-function przeniesStandard(t, poZapisie) {
+async function przeniesStandard(t, poZapisie) {
+  // Ścieżka docelowa zależy od etapu projektu inwestora; można ją nadpisać ręcznie.
+  const karty = (await GET('/karty')).filter(k => k.aktywna && k.id !== t.karta_id);
+  const wybor = el('select', { name: 'pipeline_kod' },
+    el('option', { value: '' }, '— wg etapu projektu inwestora —'),
+    ...karty.map(k => el('option', { value: k.kod }, k.nazwa)));
   const powod = el('textarea', { placeholder: 'np. klient ogłosił szeroki przetarg (>3 oferentów) bez deklaracji kontynuacji' });
-  modal('Przenieś do pipeline STANDARD (M5)', el('div', {},
-    el('div', { class: 'info-box' }, 'Temat trafi na kamień M5 STANDARD z zachowaniem ID i historii. M1–M4 zostaną auto-potwierdzone (klient przeszedł kwalifikację w fast-tracku).'),
-    el('div', { class: 'pole' }, el('label', {}, 'Powód przeniesienia *'), powod)),
+
+  modal('Zmień ścieżkę procesu', el('div', {},
+    el('div', { class: 'info-box' },
+      'Temat zachowa identyfikator i historię. Potwierdzenia kamieni starej ścieżki zostaną wyczyszczone, ' +
+      'bo dotyczą innych faktów. Przy przeniesieniu z FAST-TRACK kamienie do Komitetu zostaną auto-potwierdzone.'),
+    el('div', { class: 'pole' }, el('label', {}, 'Ścieżka docelowa'), wybor),
+    el('div', { class: 'pole' }, el('label', {}, 'Powód zmiany *'), powod)),
     [['Przenieś', 'btn-glowny', async () => {
       if (!powod.value.trim()) { toast('Powód jest wymagany', true); return false; }
-      const r = await POST(`/tematy/${t.id}/przenies-standard`, { powod: powod.value });
-      toast(`Przeniesiony do STANDARD M5 → ${r.prawdopodobienstwo}%`); poZapisie?.();
+      const r = await POST(`/tematy/${t.id}/przenies-sciezke`,
+        { powod: powod.value, pipeline_kod: wybor.value || null });
+      toast(`Przeniesiony: ${r.pipeline} → ${r.prawdopodobienstwo}%`); poZapisie?.();
     }]]);
 }
 

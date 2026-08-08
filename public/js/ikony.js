@@ -11,6 +11,7 @@ const SCIEZKI = {
   recykling: '<path d="M3 12a9 9 0 019-9 9.75 9.75 0 016.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 01-9 9 9.75 9.75 0 01-6.74-2.74L3 16"/><path d="M3 21v-5h5"/>',
   prognoza: '<path d="M23 6l-9.5 9.5-5-5L1 18"/><path d="M17 6h6v6"/>',
   metryki: '<path d="M18 20V10"/><path d="M12 20V4"/><path d="M6 20v-6"/>',
+  pdca: '<path d="M21 12a9 9 0 01-9 9 9 9 0 01-8.49-6"/><path d="M3 12a9 9 0 019-9 9 9 0 018.49 6"/><path d="M21 3v6h-6"/><path d="M3 21v-6h6"/>',
   raporty: '<path d="M21.21 15.89A10 10 0 118 2.83"/><path d="M22 12A10 10 0 0012 2v10z"/>',
   klienci: '<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v16"/>',
   partnerzy: '<path d="M20.42 4.58a5.4 5.4 0 00-7.65 0l-.77.78-.77-.78a5.4 5.4 0 00-7.65 0 5.4 5.4 0 000 7.66l8.42 8.58 8.42-8.58a5.4 5.4 0 000-7.66z"/>',

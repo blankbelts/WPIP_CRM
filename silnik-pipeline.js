@@ -59,6 +59,101 @@ export function czyZastygly(temat) {
   return dniWEtapie(temat) > km.prog_zastygniecia_dni && temat.status === 'otwarty';
 }
 
+// ── Realizm czasowy ──────────────────────────────────────────────────────────
+// prog_zastygniecia_dni to alarm ("nic sie nie dzieje"), czas_typowy_dni to norma
+// ("tyle ten etap trwa, gdy idzie dobrze"). Dopiero druga liczba pozwala powiedziec,
+// czy temat jest opozniony i kiedy realnie sie domknie.
+
+const PROG_ZAGROZENIA = 0.8; // 80% normy = zolte swiatlo, jeszcze przed przekroczeniem
+
+/** Stan czasowy tematu w biezacym etapie: w normie / zagrozony / opozniony. */
+export function stanCzasu(temat) {
+  const km = db.prepare('SELECT czas_typowy_dni FROM kamienie_karty WHERE id = ?').get(temat.kamien_id);
+  const norma = km?.czas_typowy_dni || null;
+  const dni = dniWEtapie(temat);
+  if (!norma) return { dni, norma: null, stan: 'brak normy', przekroczenie: null };
+  if (dni > norma) return { dni, norma, stan: 'opozniony', przekroczenie: dni - norma };
+  if (dni >= norma * PROG_ZAGROZENIA) return { dni, norma, stan: 'zagrozony', przekroczenie: 0 };
+  return { dni, norma, stan: 'w normie', przekroczenie: 0 };
+}
+
+/**
+ * Prognoza podpisania: reszta normy biezacego etapu + normy wszystkich kolejnych.
+ * Temat juz opozniony nie dostaje ujemnej reszty — liczymy od dzisiaj.
+ */
+export function prognozaPodpisania(temat) {
+  const kamienie = kamienieKarty(temat.karta_id);
+  const biezacy = kamienie.find(k => k.id === temat.kamien_id);
+  if (!biezacy) return { data: null, dni: null, norma_calkowita: null };
+
+  const { dni, norma } = stanCzasu(temat);
+  const resztaBiezacego = norma ? Math.max(0, norma - dni) : 0;
+  const kolejne = kamienie
+    .filter(k => k.kolejnosc > biezacy.kolejnosc)
+    .reduce((s, k) => s + (k.czas_typowy_dni || 0), 0);
+  const doKonca = resztaBiezacego + kolejne;
+
+  const data = new Date(Date.now() + doKonca * 86400000);
+  return {
+    data: data.toISOString().slice(0, 10),
+    dni: doKonca,
+    norma_calkowita: kamienie.reduce((s, k) => s + (k.czas_typowy_dni || 0), 0),
+  };
+}
+
+// ── PDCA ─────────────────────────────────────────────────────────────────────
+// Cztery fazy liczone z danych, ktore i tak powstaja w procesie:
+//   PLAN  — zadania zaplanowane na biezacy kamien
+//   DO    — ile z nich wykonano
+//   CHECK — kryteria kamienia odhaczone vs brakujace + wyniki zadan + czas vs norma
+//   ACT   — ostatnia decyzja korygujaca (albo jej brak, co samo w sobie jest sygnalem)
+
+/** Pelny stan PDCA tematu na biezacym kamieniu. */
+export function stanPdca(temat) {
+  const kamien = db.prepare('SELECT * FROM kamienie_karty WHERE id = ?').get(temat.kamien_id);
+
+  const kryteria = db.prepare(`SELECT kk.id, kk.tekst, kk.obowiazkowe,
+      (SELECT 1 FROM kryteria_odhaczenia o WHERE o.kryterium_id = kk.id AND o.temat_id = ?) AS odhaczone
+    FROM kamien_kryteria kk WHERE kk.kamien_id = ? AND kk.aktywny = 1 ORDER BY kk.kolejnosc`)
+    .all(temat.id, temat.kamien_id);
+  const spelnione = kryteria.filter(k => k.odhaczone).length;
+
+  const zadania = db.prepare(`SELECT status, wynik FROM dzialania WHERE temat_id = ? AND kamien_id = ?`)
+    .all(temat.id, temat.kamien_id);
+  const wykonane = zadania.filter(z => z.status === 'wykonane');
+  const osiagniete = wykonane.filter(z => z.wynik === 'Osiągnięty').length;
+  const nieosiagniete = wykonane.filter(z => z.wynik === 'Nieosiągnięty').length;
+
+  const ostatniaDecyzja = db.prepare(`SELECT * FROM pdca_decyzje WHERE temat_id = ?
+    ORDER BY data DESC LIMIT 1`).get(temat.id);
+
+  const czas = stanCzasu(temat);
+
+  // Sygnal alarmowy: dwa nieosiagniete wyniki z rzedu bez decyzji korygujacej
+  // znacza, ze powtarzamy to samo podejscie i liczymy na inny wynik.
+  const wymagaDecyzji = nieosiagniete >= 2 &&
+    (!ostatniaDecyzja || (wykonane.length && ostatniaDecyzja.kamien_id !== temat.kamien_id));
+
+  return {
+    kamien_kod: kamien?.kod || null,
+    kamien_nazwa: kamien?.nazwa || null,
+    plan: zadania.length,
+    do: wykonane.length,
+    check: {
+      kryteria_spelnione: spelnione,
+      kryteria_razem: kryteria.length,
+      brakujace: kryteria.filter(k => !k.odhaczone).map(k => k.tekst),
+      osiagniete, nieosiagniete,
+      skutecznosc: wykonane.length ? Math.round(100 * osiagniete / wykonane.length) : null,
+    },
+    czas,
+    act: ostatniaDecyzja || null,
+    wymaga_decyzji: wymagaDecyzji,
+    // Gotowosc kamienia: same kryteria decyduja o mozliwosci potwierdzenia
+    gotowy: kryteria.length > 0 && kryteria.filter(k => k.obowiazkowe).every(k => k.odhaczone),
+  };
+}
+
 // Reaktywacja tematow recyklingu, ktorych data powrotu nadeszla: wznow + zadanie follow-up
 export function sprawdzRecykling() {
   const doWznowienia = db.prepare(`SELECT * FROM tematy WHERE status = 'recycled' AND recycle_date IS NOT NULL AND recycle_date <= date('now')`).all();

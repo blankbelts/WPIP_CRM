@@ -4,6 +4,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { seedPipeline } from './seed-pipeline.js';
+import { seedPipelineV3 } from './seed-pipeline-v3.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Na Railway ustaw DATA_DIR na sciezke wolumenu (np. /data), inaczej baza znika przy deployu
@@ -355,6 +356,21 @@ CREATE TABLE IF NOT EXISTS kryteria_odhaczenia (
   UNIQUE(temat_id, kryterium_id)
 );
 
+-- PDCA: faza ACT. Decyzja korygujaca po sprawdzeniu wynikow dzialan na kamieniu.
+-- Kazda decyzja jest faktem z data i uzasadnieniem - to ona domyka cykl i rodzi
+-- nastepne dzialanie, zeby "co dalej" nie zostawalo w glowie handlowca.
+CREATE TABLE IF NOT EXISTS pdca_decyzje (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  temat_id INTEGER REFERENCES tematy(id) ON DELETE CASCADE,
+  kamien_id INTEGER REFERENCES kamienie_karty(id),
+  data TEXT DEFAULT (datetime('now')),
+  decyzja TEXT NOT NULL,          -- kontynuuj | zmien_podejscie | eskaluj | zamknij
+  diagnoza TEXT,                  -- co blokuje kamien (faza CHECK)
+  uzasadnienie TEXT,
+  dzialanie_id INTEGER REFERENCES dzialania(id),
+  kto TEXT
+);
+
 -- Cele sprzedazowe per handlowiec i okres (kwartal '2026Q3' lub rok '2026')
 CREATE TABLE IF NOT EXISTS cele (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -525,6 +541,20 @@ function seedSlownikJesliBrak(typ, wartosci) {
   // Tagi tematow (filtry w kanbanie; CSV w polu tekstowym)
   dodajKolumne('tematy', 'tagi', 'TEXT');
 
+  // Realizm czasowy: ile etap trwa NORMALNIE (prog_zastygniecia to alarm, nie norma).
+  // Suma po sciezce = docelowa dlugosc cyklu; roznica wobec dni_w_etapie daje
+  // stan tematu (w normie / zagrozony / opozniony) i prognoze podpisania.
+  dodajKolumne('kamienie_karty', 'czas_typowy_dni', 'INTEGER');
+  // Norma czasu dla etapow sciezki prospectingowej (kwalifikacja leada ~14 dni lacznie)
+  dodajKolumne('slowniki', 'norma_dni', 'INTEGER');
+  // Lead od surowego do zakwalifikowanego ma zamknac sie w dwoch tygodniach.
+  // Dluzej znaczy, ze albo nie ma do kogo dotrzec, albo temat nie jest prawdziwy.
+  const NORMY_PROSPECTING = {
+    'Lead surowy': 2, 'Kwalifikacja wstępna': 3, 'Research': 5, 'Scoring': 4, 'Zakwalifikowany': 0,
+  };
+  const updNorma = db.prepare(`UPDATE slowniki SET norma_dni = ? WHERE typ='kamien_prospectingu' AND wartosc = ? AND norma_dni IS NULL`);
+  for (const [etap, dni] of Object.entries(NORMY_PROSPECTING)) updNorma.run(dni, etap);
+
   // Nowe slowniki (tylko jesli brak - nie klobruja edycji uzytkownika)
   seedSlownikJesliBrak('sposob_pozyskania',
     ['Marketing', 'Prospecting NB', 'Klient powracający (AM)', 'Partner', 'Zarząd', 'Polecenie']);
@@ -596,6 +626,10 @@ function seedSlownikJesliBrak(typ, wartosci) {
 
 // Seed pipeline v2 (STANDARD M1-M8 + FAST-TRACK F1-F4) - po migracji kolumn
 seedPipeline(db);
+
+// Seed pipeline v3: rozdzielenie procesu wg etapu projektu inwestora
+// (PROJEKT_PNB ~6 mc, KONCEPCJA 12-18 mc) + normy czasu na kamieniach.
+seedPipelineV3(db);
 
 // Dezaktywacja starej karty v1 ("Standardowy proces GW"), jesli nieuzywana - zastapiona przez pipeline v2
 const staraKarta = db.prepare(`SELECT id FROM karty_ratingu WHERE kod IS NULL AND nazwa = 'Standardowy proces GW' AND aktywna = 1`).get();

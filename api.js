@@ -8,7 +8,8 @@ import { parsujPlik, przygotujImport } from './import-ki.js';
 import { parsujPipeline } from './import-pipeline.js';
 import { policzScore, przeliczLeada, opcjeWersji, zamrozWersje, logujLeada } from './scoring.js';
 import { werdyktKwalifikacji, generujIdTematu, autoOdpowiedzi, autoProces } from './kwalifikacja.js';
-import { przeliczTemat, dniWEtapie, czyZastygly, sprawdzRecykling } from './silnik-pipeline.js';
+import { przeliczTemat, dniWEtapie, czyZastygly, sprawdzRecykling, stanCzasu, prognozaPodpisania, stanPdca } from './silnik-pipeline.js';
+import { kartaDlaEtapu } from './seed-pipeline-v3.js';
 
 export const api = Router();
 
@@ -543,11 +544,25 @@ api.post('/leady/:id/uruchom-temat', (req, res) => {
   if (!lead) return res.status(404).json({ error: 'Nie znaleziono leada' });
   if (lead.temat_id) return res.status(400).json({ error: 'Lead ma już powiązany temat' });
 
-  // Persona/pipeline: FAST-TRACK dla klienta powracającego, inaczej STANDARD
-  let kod = req.body.pipeline_kod;
-  if (!kod) kod = /powracaj/i.test(lead.proces_researchu || '') ? 'FAST_TRACK' : 'STANDARD';
-  const karta = db.prepare('SELECT * FROM karty_ratingu WHERE kod = ?').get(kod);
-  if (!karta) return res.status(400).json({ error: 'Nie znaleziono pipeline persony: ' + kod });
+  // Ścieżka procesu: klient powracający → FAST-TRACK, w pozostałych przypadkach
+  // decyduje etap projektu inwestora (gotowy projekt = ~6 mc, koncepcja = 12–18 mc).
+  // Etap bierzemy z inwestycji, a gdy jej brak — z komponentu D scoringu leada,
+  // który używa tych samych etykiet. Handlowiec może nadpisać przez pipeline_kod.
+  const kod = req.body.pipeline_kod;
+  let karta;
+  if (kod) {
+    karta = db.prepare('SELECT * FROM karty_ratingu WHERE kod = ?').get(kod);
+    if (!karta) return res.status(400).json({ error: 'Nie znaleziono ścieżki procesu: ' + kod });
+  } else {
+    const inw = lead.inwestycja_id
+      ? db.prepare('SELECT etap_projektu FROM inwestycje WHERE id = ?').get(lead.inwestycja_id) : null;
+    let etap = inw?.etap_projektu;
+    if (!etap) { try { etap = JSON.parse(lead.wybory || '{}').D; } catch { /* wybory bez D */ } }
+    const powracajacy = /powracaj/i.test(lead.proces_researchu || '')
+      || !!(lead.klient_id && db.prepare('SELECT klient_powracajacy p FROM klienci WHERE id = ?').get(lead.klient_id)?.p);
+    karta = kartaDlaEtapu(db, etap, powracajacy);
+    if (!karta) return res.status(400).json({ error: 'Brak aktywnej ścieżki procesu' });
+  }
   const m1 = db.prepare('SELECT * FROM kamienie_karty WHERE karta_id = ? ORDER BY kolejnosc LIMIT 1').get(karta.id);
 
   let identyfikator = lead.identyfikator;
@@ -565,7 +580,7 @@ api.post('/leady/:id/uruchom-temat', (req, res) => {
   const tematId = Number(r.lastInsertRowid);
   db.prepare('INSERT INTO milestone_wejscia (temat_id, kamien_id) VALUES (?, ?)').run(tematId, m1.id);
   db.prepare('UPDATE leady SET temat_id = ?, status = ? WHERE id = ?').run(tematId, 'przekazany do pipeline', lead.id);
-  logujLeada(lead.id, 'uruchomienie tematu', lead.kamien, 'pipeline: ' + karta.nazwa, `Temat ${identyfikator} na kamieniu M1`);
+  logujLeada(lead.id, 'uruchomienie tematu', lead.kamien, 'pipeline: ' + karta.nazwa, `Temat ${identyfikator} na kamieniu ${m1.kod}`);
   db.prepare('INSERT INTO historia_tematu (temat_id, typ_zmiany, wartosc_po, opis) VALUES (?,?,?,?)')
     .run(tematId, 'utworzenie', `${m1.kod} ${m1.nazwa}`, `Uruchomiony z leada "${lead.nazwa}" · pipeline ${karta.nazwa}`);
   res.json({ id: tematId, identyfikator, pipeline: karta.nazwa });
@@ -584,7 +599,7 @@ api.get('/komitet/kolejka', (req, res) => {
     LEFT JOIN kamienie_karty km ON km.id = t.kamien_id
     LEFT JOIN karty_ratingu kr ON kr.id = t.karta_id
     LEFT JOIN inwestycje i ON i.id = t.inwestycja_id
-    WHERE t.status = 'otwarty' AND km.kod IN ('M5', 'F3')
+    WHERE t.status = 'otwarty' AND km.kod IN ('M5', 'F3', 'P5', 'K8')
     ORDER BY t.wartosc_kontraktu DESC`).all());
 });
 api.get('/komitet/decyzje', (req, res) => {
@@ -890,40 +905,66 @@ api.post('/tematy/:id/cofnij-kamien', (req, res) => {
   res.json({ ok: true, ...stan });
 });
 
-// Regula 7: przeniesienie FAST-TRACK -> STANDARD na M5 (szeroki przetarg bez intencji kontynuacji).
-// M1-M4 STANDARD auto-potwierdzone (klient przeszedl kwalifikacje w fast-tracku), historia i ID zachowane.
-api.post('/tematy/:id/przenies-standard', (req, res) => {
-  const { powod } = req.body;
-  const t = db.prepare(`SELECT t.*, kr.kod AS pipeline_kod, km.kod AS kamien_kod
-    FROM tematy t LEFT JOIN karty_ratingu kr ON kr.id = t.karta_id LEFT JOIN kamienie_karty km ON km.id = t.kamien_id
+// Zmiana ścieżki procesu. Dwa zastosowania:
+//  • Reguła 7 — FAST-TRACK trafia na ścieżkę pełną (szeroki przetarg bez intencji
+//    kontynuacji); kamienie do Komitetu auto-potwierdzone, bo klient przeszedł
+//    kwalifikację w fast-tracku.
+//  • Korekta ścieżki, gdy etap projektu inwestora okazał się inny, niż zakładaliśmy
+//    przy zakładaniu tematu (np. projekt i pozwolenie jednak są gotowe).
+// Bez wskazania docelowej ścieżki decyduje etap projektu z inwestycji.
+const KAMIEN_KOMITETU = ['M5', 'P5', 'K8', 'F3'];
+
+function zmienSciezke(req, res) {
+  const { powod, pipeline_kod, auto_potwierdz = true } = req.body;
+  const t = db.prepare(`SELECT t.*, kr.kod AS pipeline_kod, km.kod AS kamien_kod, i.etap_projektu
+    FROM tematy t
+    LEFT JOIN karty_ratingu kr ON kr.id = t.karta_id
+    LEFT JOIN kamienie_karty km ON km.id = t.kamien_id
+    LEFT JOIN inwestycje i ON i.id = t.inwestycja_id
     WHERE t.id = ?`).get(req.params.id);
   if (!t) return res.status(404).json({ error: 'Nie znaleziono tematu' });
-  if (t.pipeline_kod !== 'FAST_TRACK') return res.status(400).json({ error: 'Przeniesienie dotyczy tylko tematów FAST-TRACK' });
-  if (!powod) return res.status(400).json({ error: 'Podaj powód przeniesienia (np. szeroki przetarg >3 oferentów bez intencji kontynuacji)' });
+  if (!powod) return res.status(400).json({ error: 'Podaj powód zmiany ścieżki' });
 
-  const std = db.prepare(`SELECT * FROM karty_ratingu WHERE kod = 'STANDARD'`).get();
-  const kamST = db.prepare('SELECT * FROM kamienie_karty WHERE karta_id = ? ORDER BY kolejnosc').all(std.id);
-  const m5 = kamST.find(k => k.kod === 'M5');
+  const cel = pipeline_kod
+    ? db.prepare('SELECT * FROM karty_ratingu WHERE kod = ?').get(pipeline_kod)
+    : kartaDlaEtapu(db, t.etap_projektu, false);
+  if (!cel) return res.status(400).json({ error: 'Nie znaleziono docelowej ścieżki' });
+  if (cel.id === t.karta_id) return res.status(400).json({ error: 'Temat jest już na tej ścieżce' });
+
+  const kamienie = db.prepare('SELECT * FROM kamienie_karty WHERE karta_id = ? ORDER BY kolejnosc').all(cel.id);
+  const komitet = kamienie.find(k => KAMIEN_KOMITETU.includes(k.kod));
 
   db.exec('BEGIN');
   try {
-    // przepnij na STANDARD, wyczysc stare potwierdzenia (dot. F-kamieni)
+    // Potwierdzenia dotyczą kamieni starej karty — nie da się ich przenieść wprost.
     db.prepare('DELETE FROM potwierdzenia_kamieni WHERE temat_id = ?').run(t.id);
-    db.prepare('UPDATE tematy SET karta_id = ? WHERE id = ?').run(std.id, t.id);
-    // auto-potwierdz M1-M4 (kwalifikacja przeszla w fast-tracku)
-    for (const km of kamST) {
-      if (['M1', 'M2', 'M3', 'M4'].includes(km.kod)) {
-        db.prepare('INSERT INTO potwierdzenia_kamieni (temat_id, kamien_id, dowod, potwierdzajacy) VALUES (?,?,?,?)')
-          .run(t.id, km.id, `Przeniesiony z FAST-TRACK: ${powod}`, t.handlowiec || null);
-      }
+    db.prepare('UPDATE tematy SET karta_id = ? WHERE id = ?').run(cel.id, t.id);
+
+    // Fast-track dotarł do etapu kwalifikacji, więc na pełnej ścieżce wszystko
+    // przed Komitetem jest już faktem; przy zwykłej korekcie ścieżki nie zgadujemy.
+    const doPotwierdzenia = (auto_potwierdz && t.pipeline_kod === 'FAST_TRACK' && komitet)
+      ? kamienie.filter(k => k.kolejnosc < komitet.kolejnosc) : [];
+    for (const km of doPotwierdzenia) {
+      db.prepare('INSERT INTO potwierdzenia_kamieni (temat_id, kamien_id, dowod, potwierdzajacy) VALUES (?,?,?,?)')
+        .run(t.id, km.id, `Przeniesiony z ${t.pipeline_kod}: ${powod}`, t.handlowiec || null);
     }
-    const stan = przeliczTemat(t.id); // prefiks M4 -> aktualny M5, prawd 40%
+    // Działania i wejścia w etap wskazują kamienie starej karty — czyścimy dowiązanie,
+    // żeby licznik czasu w etapie i biblioteka zadań liczyły się od nowej ścieżki.
+    db.prepare('UPDATE dzialania SET kamien_id = NULL, template_id = NULL WHERE temat_id = ?').run(t.id);
+    db.prepare('DELETE FROM kryteria_odhaczenia WHERE temat_id = ?').run(t.id);
+    db.prepare('DELETE FROM milestone_wejscia WHERE temat_id = ?').run(t.id);
+
+    const stan = przeliczTemat(t.id);
     db.prepare('INSERT INTO historia_tematu (temat_id, typ_zmiany, wartosc_przed, wartosc_po, opis) VALUES (?,?,?,?,?)')
-      .run(t.id, 'przeniesienie pipeline', `FAST-TRACK ${t.kamien_kod}`, `STANDARD M5`, powod);
+      .run(t.id, 'zmiana ścieżki', `${t.pipeline_kod} ${t.kamien_kod}`, `${cel.kod} ${stan.osiagniety_kod || kamienie[0].kod}`, powod);
     db.exec('COMMIT');
-    res.json({ ok: true, ...stan });
+    res.json({ ok: true, pipeline: cel.nazwa, pipeline_kod: cel.kod, ...stan });
   } catch (err) { db.exec('ROLLBACK'); throw err; }
-});
+}
+
+api.post('/tematy/:id/przenies-sciezke', zmienSciezke);
+// Stary adres — zachowany, bo używa go widok tematu
+api.post('/tematy/:id/przenies-standard', zmienSciezke);
 
 // Powody zamkniecia dla etapu (per kamien_kod)
 api.get('/powody-zamkniecia', (req, res) => {
@@ -1125,12 +1166,20 @@ api.get('/roadmapa', (req, res) => {
   }
   const recyklingDue = db.prepare(`SELECT COUNT(*) c FROM tematy WHERE status = 'recycled'`).get().c;
 
+  // Skrot PDCA na roadmapie: ile tematow wypadlo z normy czasu i ile czeka
+  // na decyzje korygujaca. Szczegoly w karcie PDCA.
+  for (const t of tematyOtwarte) t.stan_czasu = stanCzasu(t);
+  const opoznione = tematyOtwarte.filter(t => t.stan_czasu.stan === 'opozniony');
+  const wymagaDecyzji = tematyOtwarte.filter(t => stanPdca(t).wymaga_decyzji);
+
   res.json({
     zadania, bez_ruchu: bezRuchu, zastygle,
     postep: {
       tematy_otwarte: tematyOtwarte.length, wartosc_wazona: wartoscWazona,
       liczba_zastygle: zastygle.length, liczba_bez_ruchu: bezRuchu.length,
       wg_kamienia: wgKamienia, recykling: recyklingDue,
+      liczba_opoznione: opoznione.length,
+      liczba_wymaga_decyzji: wymagaDecyzji.length,
     },
   });
 });
@@ -1588,7 +1637,9 @@ function mediana(arr) {
   return s.length % 2 ? s[m] : Math.round((s[m - 1] + s[m]) / 2);
 }
 
-api.get('/metryki', (req, res) => {
+// Metryki pipeline. Wydzielone z trasy, bo karta PDCA pokazuje je razem
+// z kontrola dzialan — jedno zrodlo liczb dla obu.
+function policzMetryki() {
   sprawdzRecykling();
 
   // Wejscia w kamienie (do lejka konwersji i czasu w etapie)
@@ -1664,7 +1715,7 @@ api.get('/metryki', (req, res) => {
   const fallback = zamknietych < MIN_ZAMKNIETYCH || cykle.length < MIN_CYKLI;
   const velocity = srCyklDni > 0 ? +((otwartePipe.c * otwartePipe.sr * winRate) / srCyklDni * 30).toFixed(1) : null;
 
-  res.json({
+  return {
     lejek, utrata, zadania,
     velocity: {
       mln_na_miesiac: velocity, otwarte: otwartePipe.c, sr_wartosc: +otwartePipe.sr.toFixed(1),
@@ -1675,14 +1726,139 @@ api.get('/metryki', (req, res) => {
       konta: am.total || 0, z_planem: am.z_planem || 0, zalegle: am.zalegle || 0,
       pokrycie_pct: am.total ? Math.round(100 * (am.z_planem || 0) / am.total) : null,
     },
+  };
+}
+
+api.get('/metryki', (req, res) => res.json(policzMetryki()));
+
+// ---------- PDCA ----------
+// Kontrola dzialan prowadzacych do kamieni milowych. Cztery fazy liczone
+// z danych procesu, bez osobnego "modulu jakosci" do wypelniania recznie.
+
+api.get('/pdca', (req, res) => {
+  sprawdzRecykling();
+
+  // Sciezki procesu z docelowa dlugoscia cyklu (suma norm kamieni)
+  const sciezki = db.prepare(`SELECT kr.id, kr.kod, kr.nazwa, kr.persona,
+      COALESCE(SUM(km.czas_typowy_dni), 0) AS norma_dni, COUNT(km.id) AS kamieni
+    FROM karty_ratingu kr LEFT JOIN kamienie_karty km ON km.karta_id = kr.id
+    WHERE kr.aktywna = 1 GROUP BY kr.id ORDER BY norma_dni`).all();
+  for (const s of sciezki) {
+    s.norma_mies = s.norma_dni ? +(s.norma_dni / 30.4).toFixed(1) : null;
+    s.tematy = db.prepare(`SELECT COUNT(*) c FROM tematy WHERE karta_id = ? AND status = 'otwarty'`).get(s.id).c;
+    s.kamienie = db.prepare(`SELECT kod, nazwa, czas_typowy_dni, prawd_start FROM kamienie_karty
+      WHERE karta_id = ? ORDER BY kolejnosc`).all(s.id);
+  }
+
+  // Tematy otwarte z pelnym stanem PDCA
+  const tematy = db.prepare(`SELECT t.*, k.nazwa AS klient_nazwa, km.kod AS kamien_kod,
+      km.nazwa AS kamien_nazwa, kr.kod AS pipeline_kod, kr.nazwa AS pipeline_nazwa
+    FROM tematy t
+    LEFT JOIN klienci k ON k.id = t.klient_id
+    LEFT JOIN kamienie_karty km ON km.id = t.kamien_id
+    LEFT JOIN karty_ratingu kr ON kr.id = t.karta_id
+    WHERE t.status = 'otwarty' ORDER BY t.wartosc_kontraktu DESC`).all();
+
+  for (const t of tematy) {
+    t.pdca = stanPdca(t);
+    t.prognoza = prognozaPodpisania(t);
+    t.zastygly = czyZastygly(t);
+    t.bez_planu = !db.prepare(`SELECT 1 FROM dzialania WHERE temat_id = ? AND status = 'planowane' LIMIT 1`).get(t.id);
+  }
+
+  const licz = (f) => tematy.filter(f).length;
+  const podsumowanie = {
+    otwarte: tematy.length,
+    w_normie: licz(t => t.pdca.czas.stan === 'w normie'),
+    zagrozone: licz(t => t.pdca.czas.stan === 'zagrozony'),
+    opoznione: licz(t => t.pdca.czas.stan === 'opozniony'),
+    wymaga_decyzji: licz(t => t.pdca.wymaga_decyzji),
+    bez_planu: licz(t => t.bez_planu),
+    gotowe_do_potwierdzenia: licz(t => t.pdca.gotowy),
+    // Ile lacznie kryteriow dzieli otwarte tematy od awansu — dosłowne "ile brakuje"
+    brakujacych_kryteriow: tematy.reduce((s, t) => s + (t.pdca.check.kryteria_razem - t.pdca.check.kryteria_spelnione), 0),
+    suma_opoznienia_dni: tematy.reduce((s, t) => s + (t.pdca.czas.przekroczenie || 0), 0),
+  };
+
+  // Kwalifikacja leada: norma narastajaco do biezacego etapu sciezki prospectingowej
+  const normy = db.prepare(`SELECT wartosc, COALESCE(norma_dni, 0) norma, kolejnosc
+    FROM slowniki WHERE typ = 'kamien_prospectingu' AND aktywny = 1 ORDER BY kolejnosc`).all();
+  const narastajaco = {};
+  let suma = 0;
+  for (const n of normy) { suma += n.norma; narastajaco[n.wartosc] = suma; }
+
+  const leadyAktywne = db.prepare(`SELECT l.id, l.nazwa, l.kamien, l.utworzono, l.priorytet, l.handlowiec,
+      k.nazwa AS klient_nazwa
+    FROM leady l LEFT JOIN klienci k ON k.id = l.klient_id
+    WHERE l.status = 'aktywny' AND COALESCE(l.kamien,'') <> 'Zakwalifikowany'`).all();
+  for (const l of leadyAktywne) {
+    l.wiek_dni = Math.floor((Date.now() - new Date(l.utworzono + 'Z').getTime()) / 86400000);
+    l.norma_dni = narastajaco[l.kamien] ?? suma;
+    l.po_normie = l.wiek_dni > l.norma_dni;
+  }
+  leadyAktywne.sort((a, b) => (b.wiek_dni - b.norma_dni) - (a.wiek_dni - a.norma_dni));
+
+  // Ostatnie decyzje korygujace — slad, ze cykl sie domyka
+  const decyzje = db.prepare(`SELECT p.*, t.identyfikator, km.kod AS kamien_kod
+    FROM pdca_decyzje p
+    LEFT JOIN tematy t ON t.id = p.temat_id
+    LEFT JOIN kamienie_karty km ON km.id = p.kamien_id
+    ORDER BY p.data DESC LIMIT 25`).all();
+
+  res.json({
+    sciezki, tematy, podsumowanie, decyzje,
+    leady: {
+      norma_calkowita_dni: suma,
+      w_kwalifikacji: leadyAktywne.length,
+      po_normie: leadyAktywne.filter(l => l.po_normie).length,
+      lista: leadyAktywne.slice(0, 30),
+    },
+    metryki: policzMetryki(),
   });
+});
+
+// Faza ACT: decyzja korygujaca. Opcjonalnie od razu rodzi nastepne dzialanie,
+// zeby temat nie zostal bez kolejnego kroku.
+api.post('/tematy/:id/pdca-decyzja', (req, res) => {
+  const temat = db.prepare('SELECT * FROM tematy WHERE id = ?').get(req.params.id);
+  if (!temat) return res.status(404).json({ error: 'Nie znaleziono tematu' });
+
+  const { decyzja, diagnoza, uzasadnienie, dzialanie } = req.body;
+  const DOZWOLONE = ['kontynuuj', 'zmien_podejscie', 'eskaluj', 'zamknij'];
+  if (!DOZWOLONE.includes(decyzja)) {
+    return res.status(400).json({ error: 'Decyzja musi być jedną z: ' + DOZWOLONE.join(', ') });
+  }
+
+  let dzialanieId = null;
+  if (dzialanie?.cel) {
+    const r = db.prepare(`INSERT INTO dzialania (typ, cel, opis, temat_id, klient_id, kamien_id, termin, status, template_id, notatki)
+      VALUES (?,?,?,?,?,?,?, 'planowane', ?, ?)`)
+      .run(dzialanie.typ || 'inne', dzialanie.cel, dzialanie.opis || null, temat.id, temat.klient_id,
+        temat.kamien_id, dzialanie.termin || null, dzialanie.template_id || null,
+        'Utworzone decyzją PDCA: ' + decyzja);
+    dzialanieId = Number(r.lastInsertRowid);
+  }
+
+  const r = db.prepare(`INSERT INTO pdca_decyzje (temat_id, kamien_id, decyzja, diagnoza, uzasadnienie, dzialanie_id, kto)
+    VALUES (?,?,?,?,?,?,?)`)
+    .run(temat.id, temat.kamien_id, decyzja, diagnoza || null, uzasadnienie || null, dzialanieId,
+      req.body.kto || temat.handlowiec || null);
+
+  db.prepare('INSERT INTO historia_tematu (temat_id, typ_zmiany, wartosc_po, opis) VALUES (?,?,?,?)')
+    .run(temat.id, 'decyzja PDCA', decyzja, [diagnoza, uzasadnienie].filter(Boolean).join(' — ') || null);
+
+  res.json({ id: Number(r.lastInsertRowid), dzialanie_id: dzialanieId, stan: stanPdca(temat) });
 });
 
 // ---------- IMPORT REALNEGO PIPELINE (arkusz K. Latosia) ----------
 // Etap interpretowany z % wygranej: temat trafia na kamien, w ktorego pasmo wpada %,
 // wczesniejsze kamienie auto-potwierdzone (dowod: stan z importu).
 function interpretujPipeline(pozycje) {
-  const std = db.prepare(`SELECT * FROM karty_ratingu WHERE kod = 'STANDARD'`).get();
+  // Import z arkusza nie zna etapu projektu inwestora, więc trafia na ścieżkę
+  // koncepcyjną — dłuższą i ostrożniejszą. Zmiana ścieżki po imporcie:
+  // /tematy/:id/przenies-standard.
+  const std = db.prepare(`SELECT * FROM karty_ratingu WHERE kod = 'KONCEPCJA' AND aktywna = 1`).get()
+    || db.prepare(`SELECT * FROM karty_ratingu WHERE kod = 'STANDARD'`).get();
   const kamienie = db.prepare('SELECT * FROM kamienie_karty WHERE karta_id = ? ORDER BY kolejnosc').all(std.id);
   const m1 = kamienie[0];
   const znajdzTemat = db.prepare('SELECT id FROM tematy WHERE identyfikator = ?');

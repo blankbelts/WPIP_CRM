@@ -4,3 +4,7 @@ wpip-crm.sqlite-wal
 wpip-crm.sqlite-shm
 *.log
 wpip-crm.przed-demo.sqlite
+wpip-crm.przed-v3.sqlite
+wpip-crm.przed-v3.sqlite-wal
+wpip-crm.przed-v3.sqlite-shm
+wpip-crm.restore.sqlite

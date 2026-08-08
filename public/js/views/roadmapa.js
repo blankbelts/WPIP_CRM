@@ -26,6 +26,8 @@ export async function widokRoadmapa(kontener) {
       kafel('Wartość ważona', mln(r.postep.wartosc_wazona) + ' PLN', 'suma wartość × prawdopodobieństwo', 'waga'),
       kafel('Zastygłe', String(r.postep.liczba_zastygle), 'przekroczony próg czasu w etapie', 'zegar', 'zol'),
       kafel('Bez ruchu', String(r.postep.liczba_bez_ruchu), 'brak otwartego zadania', 'alert', 'zol'),
+      kafel('Opóźnione', String(r.postep.liczba_opoznione ?? 0), 'ponad normę czasu etapu', 'zegar', 'czer'),
+      kafel('Wymaga decyzji', String(r.postep.liczba_wymaga_decyzji ?? 0), 'seria działań bez efektu — karta PDCA', 'pdca', 'zol'),
       kafel('Recykling', String(r.postep.recykling), 'w puli powrotów', 'recykling', 'ziel')),
 
     // --- Postep w planach (cele sprzedazowe per handlowiec) ---

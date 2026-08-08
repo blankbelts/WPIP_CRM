@@ -2,7 +2,7 @@
 import { widokPulpit } from './views/dashboard.js';
 import { widokRoadmapa } from './views/roadmapa.js';
 import { widokRecykling } from './views/recykling.js';
-import { widokMetryki } from './views/metryki.js';
+import { widokPdca } from './views/pdca.js';
 import { widokLejki } from './views/lejki.js';
 import { widokLeady, widokLead } from './views/leady.js';
 import { widokImport } from './views/import.js';
@@ -24,7 +24,7 @@ const IKONY_NAV = {
   '/': 'roadmapa', '/pulpit': 'pulpit', '/import': 'import', '/leady': 'leady',
   '/scoring': 'scoring', '/komitet': 'komitet', '/pipeline': 'pipeline',
   '/import-pipeline': 'import', '/recykling': 'recykling', '/prognoza': 'prognoza',
-  '/metryki': 'metryki', '/raporty': 'raporty', '/klienci': 'klienci',
+  '/pdca': 'pdca', '/raporty': 'raporty', '/klienci': 'klienci',
   '/partnerzy': 'partnerzy', '/dzialania': 'dzialania', '/lejki': 'lejki', '/ustawienia': 'ustawienia',
 };
 for (const a of document.querySelectorAll('[data-nav]')) {
@@ -36,7 +36,9 @@ for (const a of document.querySelectorAll('[data-nav]')) {
 const trasy = [
   [/^\/$/, widokRoadmapa],
   [/^\/pulpit$/, widokPulpit],
-  [/^\/metryki$/, widokMetryki],
+  [/^\/pdca$/, widokPdca],
+  // Stary adres metryk prowadzi do karty PDCA — metryki są teraz jej częścią
+  [/^\/metryki$/, widokPdca],
   [/^\/lejki$/, widokLejki],
   [/^\/recykling$/, widokRecykling],
   [/^\/leady$/, widokLeady],
