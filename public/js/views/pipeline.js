@@ -24,7 +24,8 @@ export async function widokPipeline(kontener) {
       (!filtrHandlowiec || t.handlowiec === filtrHandlowiec) &&
       (!filtrTag || (t.tagi || '').split(',').map(s => s.trim()).includes(filtrTag)));
     const wartoscW = otwarte.reduce((s, t) => s + (t.wartosc_kontraktu || 0) * t.prawdopodobienstwo / 100, 0);
-    naglowekInfo.textContent = `${otwarte.length} tematów otwartych · wartość ważona ${mln(wartoscW)} PLN · przeciągnij kartę na następną kolumnę, aby potwierdzić kamień`;
+    const wartoscCalk = otwarte.reduce((s, t) => s + (t.wartosc_kontraktu || 0), 0);
+    naglowekInfo.textContent = `${otwarte.length} tematów otwartych · wartość ${mln(wartoscCalk)} PLN (ważona ${mln(wartoscW)}) · przeciągnij kartę na następną kolumnę, aby potwierdzić kamień`;
 
     const kartaWg = Object.fromEntries(listaKart.map(k => [k.id, k]));
     const pipeliny = [...new Set(otwarte.map(t => t.karta_id))].map(id => kartaWg[id]).filter(Boolean);

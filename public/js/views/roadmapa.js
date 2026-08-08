@@ -28,7 +28,9 @@ export async function widokRoadmapa(kontener) {
       kafel('Bez ruchu', String(r.postep.liczba_bez_ruchu), 'brak otwartego zadania', 'alert', 'zol'),
       kafel('Opóźnione', String(r.postep.liczba_opoznione ?? 0), 'ponad normę czasu etapu', 'zegar', 'czer'),
       kafel('Wymaga decyzji', String(r.postep.liczba_wymaga_decyzji ?? 0), 'seria działań bez efektu — karta PDCA', 'pdca', 'zol'),
-      kafel('Recykling', String(r.postep.recykling), 'w puli powrotów', 'recykling', 'ziel')),
+      kafel('Recykling', String(r.postep.recykling), 'w puli powrotów', 'recykling', 'ziel'),
+      kafel('Kolejka Komitetu', String(r.postep.kolejka_komitetu ?? 0), 'tematy na M5 / P5 / K8 / F3 — kliknij', 'komitet', 'nieb', '#/komitet'),
+      kafel('Leady A do kontaktu', String(r.postep.leady_a ?? 0), 'priorytet „kontakt teraz" — kliknij', 'ogien', '', '#/leady')),
 
     // --- Tydzien vs plan sprzedazy + stan projekcji (z silnika planu wynikowego) ---
     sekcjaTydzienVsPlan(pw),
@@ -162,8 +164,11 @@ function formularzCelu(c, odswiez) {
   }]]);
 }
 
-function kafel(etykieta, wartosc, drobne, ikonaNazwa, odcien = '') {
-  return el('div', { class: 'kafel' },
+function kafel(etykieta, wartosc, drobne, ikonaNazwa, odcien = '', link = null) {
+  return el('div', {
+    class: 'kafel', style: link ? 'cursor:pointer' : '',
+    onclick: link ? () => location.hash = link : undefined,
+  },
     ikonaNazwa ? el('div', { class: 'ikona-tlo ' + odcien }, ikona(ikonaNazwa, 18)) : null,
     el('div', { class: 'etykieta' }, etykieta),
     el('div', { class: 'wartosc' }, wartosc),

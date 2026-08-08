@@ -1,5 +1,4 @@
 // Router aplikacji WPIP CRM
-import { widokPulpit } from './views/dashboard.js';
 import { widokRoadmapa } from './views/roadmapa.js';
 import { widokRecykling } from './views/recykling.js';
 import { widokPdca } from './views/pdca.js';
@@ -21,7 +20,7 @@ import { ikona } from './ikony.js';
 
 // Ikony nawigacji (mapowanie data-nav -> nazwa ikony)
 const IKONY_NAV = {
-  '/': 'roadmapa', '/pulpit': 'pulpit', '/import': 'import', '/leady': 'leady',
+  '/': 'roadmapa', '/import': 'import', '/leady': 'leady',
   '/scoring': 'scoring', '/komitet': 'komitet', '/pipeline': 'pipeline',
   '/import-pipeline': 'import', '/recykling': 'recykling', '/prognoza': 'prognoza',
   '/pdca': 'pdca', '/raporty': 'raporty', '/klienci': 'klienci',
@@ -35,7 +34,7 @@ for (const a of document.querySelectorAll('[data-nav]')) {
 // Widok dostaje (kontener, ...grupy regex, query string)
 const trasy = [
   [/^\/$/, widokRoadmapa],
-  [/^\/pulpit$/, widokPulpit],
+  [/^\/pulpit$/, widokRoadmapa], // Pulpit KPI scalony z Roadmapa - stare linki dzialaja
   [/^\/pdca$/, widokPdca],
   // Stary adres metryk prowadzi do karty PDCA — metryki są teraz jej częścią
   [/^\/metryki$/, widokPdca],

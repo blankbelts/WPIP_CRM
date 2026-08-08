@@ -1172,6 +1172,10 @@ api.get('/roadmapa', (req, res) => {
   const opoznione = tematyOtwarte.filter(t => t.stan_czasu.stan === 'opozniony');
   const wymagaDecyzji = tematyOtwarte.filter(t => stanPdca(t).wymaga_decyzji);
 
+  // Operacyjne przypominajki przejete z Pulpitu KPI (scalony z Roadmapa)
+  const kolejkaKomitetu = tematyOtwarte.filter(t => ['M5', 'P5', 'K8', 'F3'].includes(t.kamien_kod)).length;
+  const leadyA = db.prepare(`SELECT COUNT(*) c FROM leady WHERE status = 'aktywny' AND priorytet = 'A'`).get().c;
+
   res.json({
     zadania, bez_ruchu: bezRuchu, zastygle,
     postep: {
@@ -1180,6 +1184,8 @@ api.get('/roadmapa', (req, res) => {
       wg_kamienia: wgKamienia, recykling: recyklingDue,
       liczba_opoznione: opoznione.length,
       liczba_wymaga_decyzji: wymagaDecyzji.length,
+      kolejka_komitetu: kolejkaKomitetu,
+      leady_a: leadyA,
     },
   });
 });
@@ -2164,71 +2170,3 @@ api.post('/demo/przywroc', (req, res) => {
   setTimeout(() => process.exit(1), 400);
 });
 
-// ---------- DASHBOARD ----------
-api.get('/dashboard', (req, res) => {
-  const tematyOtwarte = db.prepare(`
-    SELECT t.*, km.nazwa AS kamien_nazwa, km.kolejnosc AS kamien_kolejnosc, k.nazwa AS klient_nazwa
-    FROM tematy t LEFT JOIN kamienie_karty km ON km.id = t.kamien_id
-    LEFT JOIN klienci k ON k.id = t.klient_id
-    WHERE t.status = 'otwarty'`).all();
-
-  const wartoscPipeline = tematyOtwarte.reduce((s, t) => s + (t.wartosc_kontraktu || 0), 0);
-  const wartoscWazona = tematyOtwarte.reduce((s, t) => s + (t.wartosc_kontraktu || 0) * (t.prawdopodobienstwo || 0) / 100, 0);
-
-  const zamkniete = db.prepare(`SELECT status, COUNT(*) c FROM tematy WHERE status IN ('wygrany','przegrany') GROUP BY status`).all();
-  const wygrane = zamkniete.find(z => z.status === 'wygrany')?.c || 0;
-  const przegrane = zamkniete.find(z => z.status === 'przegrany')?.c || 0;
-  const winRate = (wygrane + przegrane) > 0 ? Math.round(100 * wygrane / (wygrane + przegrane)) : null;
-
-  const leadyWgPriorytetu = db.prepare(`SELECT priorytet, COUNT(*) c FROM leady
-    WHERE status = 'aktywny' GROUP BY priorytet`).all();
-  const leadyWgKamienia = db.prepare(`SELECT kamien, COUNT(*) c FROM leady
-    WHERE status = 'aktywny' GROUP BY kamien`).all();
-
-  const kwartaly = {};
-  for (const t of tematyOtwarte.concat(db.prepare(`SELECT t.*, NULL AS kamien_nazwa, NULL AS kamien_kolejnosc, NULL AS klient_nazwa FROM tematy t WHERE t.status = 'wygrany'`).all())) {
-    const start = t.termin_realizacji || t.data_startu;
-    if (!start || !t.wartosc_kontraktu || !t.czas_trwania_mies) continue;
-    const d0 = new Date(start);
-    if (isNaN(d0)) continue;
-    const mies = t.czas_trwania_mies;
-    const naMies = t.wartosc_kontraktu / mies;
-    const prawd = t.status === 'wygrany' ? 100 : (t.prawdopodobienstwo || 0);
-    for (let m = 0; m < mies; m++) {
-      const dd = new Date(d0.getFullYear(), d0.getMonth() + m, 1);
-      const q = `${dd.getFullYear()} Q${Math.floor(dd.getMonth() / 3) + 1}`;
-      kwartaly[q] ||= { kwartal: q, planowany: 0, wazony: 0 };
-      kwartaly[q].planowany += naMies;
-      kwartaly[q].wazony += naMies * prawd / 100;
-    }
-  }
-
-  const dzialaniaTydzien = db.prepare(`
-    SELECT d.*, t.identyfikator AS temat_identyfikator, l.nazwa AS lead_nazwa
-    FROM dzialania d LEFT JOIN tematy t ON t.id = d.temat_id LEFT JOIN leady l ON l.id = d.lead_id
-    WHERE d.status = 'planowane' AND (d.termin IS NULL OR d.termin <= date('now', '+7 days'))
-    ORDER BY d.termin IS NULL, d.termin LIMIT 20`).all();
-
-  const decyzjeKomitetu = db.prepare(`SELECT decyzja, COUNT(*) c FROM decyzje_komitetu GROUP BY decyzja`).all();
-  const kolejkaKomitetu = db.prepare(`SELECT COUNT(*) c FROM leady
-    WHERE kamien = 'Zakwalifikowany' AND status = 'aktywny' AND temat_id IS NULL`).get().c;
-
-  res.json({
-    tematy_otwarte: tematyOtwarte.length,
-    wartosc_pipeline: wartoscPipeline,
-    wartosc_wazona: wartoscWazona,
-    win_rate: winRate,
-    wygrane, przegrane,
-    leady_wg_priorytetu: leadyWgPriorytetu,
-    leady_wg_kamienia: leadyWgKamienia,
-    kwartaly: Object.values(kwartaly).sort((a, b) => a.kwartal.localeCompare(b.kwartal)),
-    dzialania_tydzien: dzialaniaTydzien,
-    decyzje_komitetu: decyzjeKomitetu,
-    kolejka_komitetu: kolejkaKomitetu,
-    tematy_wg_kamienia: tematyOtwarte.reduce((acc, t) => {
-      const k = t.kamien_nazwa || '?';
-      acc[k] = (acc[k] || 0) + 1;
-      return acc;
-    }, {}),
-  });
-});
