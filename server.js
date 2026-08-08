@@ -27,6 +27,14 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 3400;
-app.listen(PORT, () => {
+const serwer = app.listen(PORT, () => {
   console.log(`WPIP CRM dziala: http://localhost:${PORT}`);
+});
+
+// Graceful shutdown: przy deployu Railway stary kontener dostaje SIGTERM -
+// zamykamy serwer i konczymy czysto, zeby jak najszybciej zwolnic locka na bazie
+process.on('SIGTERM', () => {
+  console.log('SIGTERM - zamykanie serwera');
+  serwer.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 3000).unref();
 });

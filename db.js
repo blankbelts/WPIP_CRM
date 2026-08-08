@@ -21,7 +21,10 @@ if (fs.existsSync(SCIEZKA_RESTORE)) {
 }
 
 console.log('Baza danych:', SCIEZKA_BAZY);
-export const db = new DatabaseSync(SCIEZKA_BAZY);
+// timeout: przy deployu na Railway stary kontener moze jeszcze trzymac locka na bazie
+// z wolumenu - czekamy do 15 s zamiast padac z SQLITE_BUSY (PRAGMA busy_timeout
+// nie dziala w node:sqlite, timeout trzeba podac w konstruktorze)
+export const db = new DatabaseSync(SCIEZKA_BAZY, { timeout: 15000 });
 
 db.exec(`PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;`);
 
