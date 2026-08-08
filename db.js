@@ -543,6 +543,8 @@ function seedSlownikJesliBrak(typ, wartosci) {
   dodajKolumne('klienci', 'data_nastepnego_przegladu', 'TEXT');
   // Plan wynikowy: cel SPRZEDAZY (wartosc podpisanych umow) per handlowiec - odrebny od przychodu wazonego
   dodajKolumne('cele', 'sprzedaz', 'REAL');
+  // Timestamp wykonania dzialania (do liczenia "zrobione w tym tygodniu" vs plan tygodnia)
+  dodajKolumne('dzialania', 'data_wykonania', 'TEXT');
   // Tagi tematow (filtry w kanbanie; CSV w polu tekstowym)
   dodajKolumne('tematy', 'tagi', 'TEXT');
 

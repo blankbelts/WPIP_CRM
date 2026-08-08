@@ -2,11 +2,11 @@
 // Zadania tygodnia pogrupowane per temat, z oczekiwanym efektem i podpowiedzia "co dalej".
 // Regula "zawsze nastepny krok": tematy bez otwartego zadania sa wyroznione.
 import { GET, POST, PUT, DEL } from '../api.js';
-import { el, toast, mln, badge, dataPl, modal, pole, zbierzForm, ring, awatar } from '../ui.js';
+import { el, toast, mln, badge, dataPl, modal, pole, zbierzForm, ring, awatar, tabela } from '../ui.js';
 import { ikona, IKONA_TYPU_DZIALANIA } from '../ikony.js';
 
 export async function widokRoadmapa(kontener) {
-  const [r, cele] = await Promise.all([GET('/roadmapa'), GET('/cele/postep')]);
+  const [r, cele, pw] = await Promise.all([GET('/roadmapa'), GET('/cele/postep'), GET('/plan-wynikowy')]);
   const odswiez = () => widokRoadmapa((kontener.innerHTML = '', kontener));
 
   // Grupowanie zadan per temat/lead
@@ -29,6 +29,9 @@ export async function widokRoadmapa(kontener) {
       kafel('Opóźnione', String(r.postep.liczba_opoznione ?? 0), 'ponad normę czasu etapu', 'zegar', 'czer'),
       kafel('Wymaga decyzji', String(r.postep.liczba_wymaga_decyzji ?? 0), 'seria działań bez efektu — karta PDCA', 'pdca', 'zol'),
       kafel('Recykling', String(r.postep.recykling), 'w puli powrotów', 'recykling', 'ziel')),
+
+    // --- Tydzien vs plan sprzedazy + stan projekcji (z silnika planu wynikowego) ---
+    sekcjaTydzienVsPlan(pw),
 
     // --- Postep w planach (cele sprzedazowe per handlowiec) ---
     el('div', { class: 'karta-box' },
@@ -57,6 +60,57 @@ export async function widokRoadmapa(kontener) {
     Object.keys(grupy).length ? el('div', {}, ...Object.values(grupy).map(g => kartaGrupy(g, odswiez)))
       : el('div', { class: 'karta-box puste' }, 'Brak zaplanowanych zadań na ten tydzień. Dodaj zadania z biblioteki na temacie.'),
   );
+}
+
+// Tydzien vs plan: co MUSI sie wydarzyc w tym tygodniu, zeby plan sprzedazy sie spinal,
+// oraz aktualny stan projekcji (firma + handlowcy). Szczegoly i lejek odwrocony: karta PDCA.
+function sekcjaTydzienVsPlan(pw) {
+  const naPlanie = pw.projekcja >= pw.plan_firmowy;
+  const pasek = (zrobione, wymagane) => {
+    const proc = wymagane > 0 ? Math.min(100, Math.round(100 * zrobione / wymagane)) : 100;
+    return el('div', { style: 'flex:1; background:var(--szary-tlo); border-radius:6px; height:16px; overflow:hidden; min-width:90px' },
+      el('div', { style: `height:100%; width:${proc}%; background:${proc >= 100 ? 'var(--zielony)' : 'var(--akcent)'}; min-width:2px` }));
+  };
+
+  return el('div', { class: 'karta-box', style: 'border-left: 4px solid ' + (naPlanie ? 'var(--zielony)' : 'var(--akcent)') },
+    el('div', { class: 'naglowek-akcje' },
+      el('h2', { style: 'margin-top:0' }, ikona('cel'), ' Ten tydzień vs plan sprzedaży ',
+        badge(`od ${dataPl(pw.tydzien.od)}`, 'szary')),
+      el('a', { class: 'btn btn-maly', href: '#/pdca' }, 'Szczegóły i lejek → PDCA')),
+
+    // Stan projekcji: firma
+    el('div', { class: 'kafle' },
+      kafel('Plan sprzedaży ' + pw.okres, mln(pw.plan_firmowy) + ' PLN', null, 'cel'),
+      kafel('Idziemy na', mln(pw.projekcja) + ' PLN',
+        `wygrane ${mln(pw.wygrane.w)} + ważony ${mln(pw.wazony)}`, 'prognoza', naPlanie ? 'ziel' : 'zol'),
+      kafel('Luka', mln(pw.luka) + ' PLN', naPlanie ? 'plan pokryty' : `${pw.tygodnie_pozostale} tyg. do końca okresu`, 'alert', naPlanie ? 'ziel' : 'czer')),
+
+    // Wymagane w tym tygodniu vs zrobione
+    el('h2', { style: 'font-size:14px; margin-top:4px' }, 'Niezbędne w tym tygodniu (z lejka odwróconego)'),
+    pw.luka <= 0 ? el('div', { class: 'info-box' }, 'Projekcja pokrywa plan — tygodniowe minima wynoszą 0. Utrzymuj tempo działań z roadmapy i pilnuj tematów zagrożonych.') : '',
+    el('div', { style: 'display:flex; flex-direction:column; gap:8px' },
+      ...pw.tydzien.pozycje.map(p => el('div', { style: 'display:flex; align-items:center; gap:12px' },
+        el('div', { style: 'width:150px; font-size:13px; font-weight:600' }, p.poziom),
+        pasek(p.zrobione, p.wymagane),
+        el('div', { style: 'width:200px; font-size:12px; color:var(--tekst-2); text-align:right' },
+          `${p.zrobione} / ${p.wymagane} wymaganych` + (p.zaplanowane != null ? ` · ${p.zaplanowane} zaplan.` : '')),
+        el('div', { style: 'width:90px; text-align:right' },
+          p.zrobione >= p.wymagane ? badge('✓ jest', 'zielony') : badge(`−${+(p.wymagane - p.zrobione).toFixed(1)}`, 'czerwony'))))),
+
+    // Stan projekcji per handlowiec
+    pw.handlowcy.length ? el('div', {},
+      el('h2', { style: 'font-size:14px' }, 'Projekcje handlowców'),
+      tabela([
+        { naglowek: 'Handlowiec', render: h => el('span', { style: 'display:inline-flex; align-items:center; gap:6px' }, awatar(h.handlowiec), el('b', {}, h.handlowiec)) },
+        { naglowek: 'Plan', klasa: 'liczba', render: h => mln(h.plan) },
+        { naglowek: 'Idzie na', klasa: 'liczba', render: h => el('b', {}, mln(h.projekcja)) },
+        {
+          naglowek: 'Luka', klasa: 'liczba', render: h => h.luka <= 0
+            ? badge('✓ plan', 'zielony') : el('span', { style: 'color:var(--czerwony); font-weight:700' }, mln(h.luka))
+        },
+        { naglowek: 'Działania: tydzień', klasa: 'liczba', render: h => `${h.tydzien_dzialania} / ${h.potrzebne_dzialania_tydz}` },
+        { naglowek: 'Leady: tydzień', klasa: 'liczba', render: h => `${h.tydzien_leady} / ${h.potrzebne_leady_tydz}` },
+      ], pw.handlowcy)) : '');
 }
 
 function blokCelu(c, odswiez) {

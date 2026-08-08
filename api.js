@@ -1114,7 +1114,7 @@ api.post('/dzialania/:id/wynik', (req, res) => {
     .get('wynik_dzialania', wynik);
   if (!slownik) return res.status(400).json({ error: 'Nieznany wynik dzialania (sprawdz slownik)' });
 
-  db.prepare('UPDATE dzialania SET wynik = ?, status = ? WHERE id = ?').run(wynik, 'wykonane', d.id);
+  db.prepare(`UPDATE dzialania SET wynik = ?, status = ?, data_wykonania = datetime('now') WHERE id = ?`).run(wynik, 'wykonane', d.id);
 
   // Podpowiedz kolejnego kroku z biblioteki (sukces vs porazka)
   let coDalej = null;
@@ -1723,6 +1723,43 @@ function policzPlanWynikowy(okres) {
   const velocityAktualna = policzMetryki().velocity.mln_na_miesiac;
   const velocityPotrzebna = +(luka / miesiacePozostale).toFixed(1);
 
+  // ── Biezacy tydzien: wymagane tempo vs faktyczne wykonanie (od poniedzialku) ──
+  const teraz = new Date();
+  const pon = new Date(teraz);
+  pon.setDate(teraz.getDate() - ((teraz.getDay() + 6) % 7));
+  const poniedzialek = pon.toISOString().slice(0, 10);
+
+  const wykonanieTygodnia = {
+    nowe_leady: db.prepare(`SELECT COUNT(*) c FROM leady WHERE utworzono >= ?`).get(poniedzialek).c,
+    kwalifikacje: db.prepare(`SELECT COUNT(DISTINCT lead_id) c FROM historia_leada
+      WHERE typ_zmiany LIKE 'kwalifikacja%' AND data >= ?`).get(poniedzialek).c,
+    dzialania_wykonane: db.prepare(`SELECT COUNT(*) c FROM dzialania WHERE status = 'wykonane'
+      AND COALESCE(data_wykonania, termin, utworzono) >= ?`).get(poniedzialek).c,
+    dzialania_zaplanowane: db.prepare(`SELECT COUNT(*) c FROM dzialania WHERE status = 'planowane'
+      AND termin IS NOT NULL AND termin >= ? AND termin < date(?, '+7 days')`).get(poniedzialek, poniedzialek).c,
+    komitety: db.prepare(`SELECT COUNT(DISTINCT pk.temat_id) c FROM potwierdzenia_kamieni pk
+      JOIN kamienie_karty km ON km.id = pk.kamien_id
+      WHERE km.kod IN ('M5','P5','K8','F3') AND pk.data >= ?`).get(poniedzialek).c,
+    wygrane: db.prepare(`SELECT COUNT(DISTINCT t.id) c FROM tematy t JOIN historia_tematu h ON h.temat_id = t.id
+      WHERE t.status = 'wygrany' AND h.wartosc_po = 'wygrany' AND h.data >= ?`).get(poniedzialek).c,
+  };
+  const tydzienPlanVsWykonanie = [
+    { poziom: 'Nowe leady', wymagane: +(potrzebneLeady / tygodniePozostale).toFixed(1), zrobione: wykonanieTygodnia.nowe_leady },
+    { poziom: 'Kwalifikacje', wymagane: +(potrzebneInteresujace / tygodniePozostale).toFixed(1), zrobione: wykonanieTygodnia.kwalifikacje },
+    { poziom: 'Działania', wymagane: +(potrzebneDzialania / tygodniePozostale).toFixed(1), zrobione: wykonanieTygodnia.dzialania_wykonane, zaplanowane: wykonanieTygodnia.dzialania_zaplanowane },
+    { poziom: 'Komitety (BID)', wymagane: +(potrzebneKomitety / tygodniePozostale).toFixed(1), zrobione: wykonanieTygodnia.komitety },
+    { poziom: 'Wygrane', wymagane: +(potrzebneWygrane / tygodniePozostale).toFixed(1), zrobione: wykonanieTygodnia.wygrane },
+  ];
+
+  // Wykonanie tygodnia per handlowiec (dzialania przez temat/lead, leady wprost)
+  const wykTydzHandlowca = (h) => ({
+    dzialania: db.prepare(`SELECT COUNT(*) c FROM dzialania d
+      LEFT JOIN tematy t ON t.id = d.temat_id LEFT JOIN leady l ON l.id = d.lead_id
+      WHERE d.status = 'wykonane' AND COALESCE(d.data_wykonania, d.termin, d.utworzono) >= ?
+      AND COALESCE(t.handlowiec, l.handlowiec) = ?`).get(poniedzialek, h).c,
+    nowe_leady: db.prepare(`SELECT COUNT(*) c FROM leady WHERE utworzono >= ? AND handlowiec = ?`).get(poniedzialek, h).c,
+  });
+
   // ── Per handlowiec (te same konwersje, cel z tabeli cele) ──
   const mapaWygranych = Object.fromEntries(wygrane.map(r => [r.handlowiec || '—', r]));
   const mapaOtwartych = Object.fromEntries(otwarte.map(r => [r.handlowiec || '—', r]));
@@ -1734,12 +1771,14 @@ function policzPlanWynikowy(okres) {
     const wygraneH = Math.ceil(lukaH / srWartoscWygranej);
     const leadyH = Math.ceil(wygraneH / (konw.komitet_wygrana.wartosc * konw.temat_komitet.wartosc
       * konw.interesujacy_temat.wartosc * konw.lead_interesujacy.wartosc));
+    const wykT = wykTydzHandlowca(c.handlowiec);
     return {
       handlowiec: c.handlowiec, plan: c.sprzedaz, wygrane_wartosc: +wyg.w.toFixed(1), wygrane_n: wyg.n,
       wazony: +otw.w.toFixed(1), tematy_otwarte: otw.n, projekcja: projekcjaH, luka: lukaH,
       potrzebne_wygrane: wygraneH,
       potrzebne_leady_tydz: +(leadyH / tygodniePozostale).toFixed(1),
       potrzebne_dzialania_tydz: +(wygraneH * srDzialan / tygodniePozostale).toFixed(1),
+      tydzien_dzialania: wykT.dzialania, tydzien_leady: wykT.nowe_leady,
     };
   });
 
@@ -1749,6 +1788,7 @@ function policzPlanWynikowy(okres) {
     projekcja, luka, sr_wartosc_wygranej: +srWartoscWygranej.toFixed(1),
     velocity: { aktualna: velocityAktualna, potrzebna: velocityPotrzebna },
     konwersje: konw,
+    tydzien: { od: poniedzialek, pozycje: tydzienPlanVsWykonanie },
     lejek_odwrocony: [
       { poziom: 'Nowe leady', potrzeba: potrzebneLeady, tygodniowo: +(potrzebneLeady / tygodniePozostale).toFixed(1), jest: jest.leady, konwersja: konw.lead_interesujacy },
       { poziom: 'Kwalifikacje (interesujące)', potrzeba: potrzebneInteresujace, tygodniowo: +(potrzebneInteresujace / tygodniePozostale).toFixed(1), jest: jest.interesujace, konwersja: konw.interesujacy_temat },
