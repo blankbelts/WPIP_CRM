@@ -538,6 +538,8 @@ function seedSlownikJesliBrak(typ, wartosci) {
   dodajKolumne('tematy', 'lead_id', 'INTEGER');
   // Account Management: plan opieki nad kontem powracajacym (data nastepnego przegladu)
   dodajKolumne('klienci', 'data_nastepnego_przegladu', 'TEXT');
+  // Plan wynikowy: cel SPRZEDAZY (wartosc podpisanych umow) per handlowiec - odrebny od przychodu wazonego
+  dodajKolumne('cele', 'sprzedaz', 'REAL');
   // Tagi tematow (filtry w kanbanie; CSV w polu tekstowym)
   dodajKolumne('tematy', 'tagi', 'TEXT');
 
@@ -660,6 +662,17 @@ if (db.prepare('SELECT COUNT(*) c FROM kamien_kryteria').get().c === 0) {
   for (const km of kamienieV2) {
     // WYGRANA w FAST-TRACK tez dostaje kryterium umowy
     (KRYTERIA[km.kod] || []).forEach((tekst, i) => insKryt.run(km.id, tekst, i));
+  }
+}
+
+// Seed testowych planow sprzedazy (450 mln firma / 70 mln na handlowca) - jednorazowo
+if (!db.prepare(`SELECT 1 FROM konfiguracja WHERE klucz = 'plan_sprzedazy_2026'`).get()) {
+  db.prepare(`INSERT INTO konfiguracja (klucz, wartosc) VALUES ('plan_sprzedazy_2026', '450')`).run();
+  db.prepare(`UPDATE cele SET sprzedaz = 70 WHERE okres = '2026' AND sprzedaz IS NULL`).run();
+  for (const h of ['K. Latoś', 'P. Kowalski']) {
+    const jest = db.prepare(`SELECT 1 FROM cele WHERE okres = '2026' AND handlowiec = ? AND aktywny = 1`).get(h);
+    if (jest) db.prepare(`UPDATE cele SET sprzedaz = COALESCE(sprzedaz, 70) WHERE okres = '2026' AND handlowiec = ?`).run(h);
+    else db.prepare(`INSERT INTO cele (okres, handlowiec, sprzedaz) VALUES ('2026', ?, 70)`).run(h);
   }
 }
 

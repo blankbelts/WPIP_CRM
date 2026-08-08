@@ -20,15 +20,17 @@ const DECYZJE = [
 ];
 
 export async function widokPdca(kontener) {
-  const d = await GET('/pdca');
+  const [d, pw] = await Promise.all([GET('/pdca'), GET('/plan-wynikowy')]);
   const odswiez = () => widokPdca((kontener.innerHTML = '', kontener));
   const p = d.podsumowanie;
 
   kontener.append(
     el('h1', {}, 'PDCA i metryki pipeline'),
     el('p', { class: 'podtytul' },
-      'Kamień milowy to fakt po stronie klienta. Ta karta pokazuje, ile do niego brakuje, ' +
-      'czy tempo mieści się w normie ścieżki i gdzie powtarzamy podejście, które nie działa.'),
+      'Kamień milowy to fakt po stronie klienta. Ta karta pokazuje, na jaki wynik idziemy przy ' +
+      'aktualnych postępach, ile do niego brakuje i gdzie powtarzamy podejście, które nie działa.'),
+
+    sekcjaNaCoIdziemy(pw, odswiez),
 
     el('div', { class: 'kafle' },
       kafel('Tematy otwarte', String(p.otwarte), null, 'pipeline', 'nieb'),
@@ -44,6 +46,73 @@ export async function widokPdca(kontener) {
     sekcjaCheckPipeline(d.metryki),
     sekcjaDecyzje(d.decyzje),
   );
+}
+
+// ── Kontrola tygodniowa: na jaki wynik idziemy + odwrocony lejek z konwersji ──
+function sekcjaNaCoIdziemy(pw, odswiez) {
+  const naPlanie = pw.projekcja >= pw.plan_firmowy;
+  const zrodloBadge = (k) => badge(k.zrodlo === 'pomiar' ? `${Math.round(k.wartosc * 100)}%` : `~${Math.round(k.wartosc * 100)}%`,
+    k.zrodlo === 'pomiar' ? 'nieb' : 'szary');
+
+  return el('div', { class: 'karta-box', style: 'border-left: 4px solid ' + (naPlanie ? 'var(--zielony)' : 'var(--akcent)') },
+    el('div', { class: 'naglowek-akcje' },
+      el('h2', { style: 'margin-top:0' }, ikona('cel'), ' Na co idziemy — ', pw.okres,
+        ' ', badge(`${pw.tygodnie_pozostale} tyg. do końca`, 'szary')),
+      el('button', {
+        class: 'btn btn-maly', onclick: () => {
+          const input = el('input', { type: 'number', value: pw.plan_firmowy, style: 'max-width:140px' });
+          modal('Plan sprzedaży firmy (' + pw.okres + ')', el('div', { class: 'pole' },
+            el('label', {}, 'Plan (mln PLN) — wartość podpisanych umów'), input),
+            [['Zapisz', 'btn-glowny', async () => {
+              await (await import('../api.js')).PUT('/plan-wynikowy', { rok: pw.okres, plan: Number(input.value) });
+              toast('Plan zapisany'); odswiez();
+            }]]);
+        }
+      }, 'Zmień plan')),
+
+    el('div', { class: 'kafle' },
+      kafel('Plan sprzedaży', mln(pw.plan_firmowy) + ' PLN', 'wartość podpisanych umów', 'cel'),
+      kafel('Projekcja („idziemy na")', mln(pw.projekcja) + ' PLN',
+        `wygrane ${mln(pw.wygrane.w)} + ważony pipeline ${mln(pw.wazony)}`, 'prognoza', naPlanie ? 'ziel' : 'zol'),
+      kafel('Luka do planu', mln(pw.luka) + ' PLN', naPlanie ? 'plan pokryty projekcją' : `≈ ${Math.ceil(pw.luka / pw.sr_wartosc_wygranej)} wygranych po śr. ${mln(pw.sr_wartosc_wygranej)}`, 'alert', naPlanie ? 'ziel' : 'czer'),
+      kafel('Velocity: jest / trzeba', `${pw.velocity.aktualna ?? '—'} / ${pw.velocity.potrzebna}`,
+        'mln PLN miesięcznie', 'waga', (pw.velocity.aktualna || 0) >= pw.velocity.potrzebna ? 'ziel' : 'czer'),
+      kafel('Działania / tydzień', String(pw.dzialania.tygodniowo),
+        `${pw.dzialania.potrzeba} łącznie · śr. ${pw.dzialania.srednio_na_wygrana} działań na wygraną`, 'dzialania', 'nieb')),
+
+    // Odwrocony lejek: ile potrzeba na kazdym poziomie
+    el('h2', { style: 'font-size:14px' }, 'Ile potrzeba, żeby domknąć lukę (z konwersji między etapami)'),
+    tabela([
+      { naglowek: 'Poziom', render: w => el('b', {}, w.poziom) },
+      { naglowek: 'Konwersja niżej', klasa: 'wysrodkuj', render: w => w.konwersja ? zrodloBadge(w.konwersja) : '—' },
+      { naglowek: 'Potrzeba w okresie', klasa: 'liczba', render: w => String(w.potrzeba) },
+      { naglowek: 'Tygodniowo', klasa: 'liczba', render: w => el('b', {}, String(w.tygodniowo)) },
+      { naglowek: 'Jest teraz', klasa: 'liczba', render: w => String(w.jest) },
+      {
+        naglowek: 'Bilans', klasa: 'wysrodkuj', render: w => w.jest >= w.potrzeba
+          ? badge('✓ pokryte', 'zielony') : badge(`brakuje ${w.potrzeba - w.jest}`, 'czerwony')
+      },
+    ], pw.lejek_odwrocony),
+    el('p', { class: 'podtytul', style: 'margin:8px 0 0; font-size:12px' },
+      'Konwersje: niebieskie = zmierzone z danych CRM, szare (~) = baseline do czasu zebrania próby. „Jest teraz" dla leadów/tematów = otwarte w toku; dla komitetów/wygranych = zrealizowane w okresie.'),
+
+    // Per handlowiec
+    pw.handlowcy.length ? el('div', {},
+      el('h2', { style: 'font-size:14px' }, 'Per handlowiec (plan sprzedaży z celów rocznych)'),
+      tabela([
+        { naglowek: 'Handlowiec', render: h => el('b', {}, h.handlowiec) },
+        { naglowek: 'Plan', klasa: 'liczba', render: h => mln(h.plan) },
+        { naglowek: 'Wygrane', klasa: 'liczba', render: h => `${mln(h.wygrane_wartosc)} (${h.wygrane_n})` },
+        { naglowek: 'Ważony pipeline', klasa: 'liczba', render: h => `${mln(h.wazony)} (${h.tematy_otwarte} tem.)` },
+        { naglowek: 'Projekcja', klasa: 'liczba', render: h => el('b', {}, mln(h.projekcja)) },
+        {
+          naglowek: 'Luka', klasa: 'liczba', render: h => h.luka <= 0
+            ? badge('✓ plan', 'zielony') : el('span', { style: 'color:var(--czerwony); font-weight:700' }, mln(h.luka))
+        },
+        { naglowek: 'Brak. wygranych', klasa: 'liczba', render: h => String(h.potrzebne_wygrane) },
+        { naglowek: 'Leady / tydz.', klasa: 'liczba', render: h => String(h.potrzebne_leady_tydz) },
+        { naglowek: 'Działania / tydz.', klasa: 'liczba', render: h => el('b', {}, String(h.potrzebne_dzialania_tydz)) },
+      ], pw.handlowcy)) : '');
 }
 
 // ── PLAN: ścieżki procesu i ich normy czasu ──────────────────────────────────

@@ -1577,15 +1577,15 @@ api.get('/cele', (req, res) => {
   res.json(db.prepare('SELECT * FROM cele WHERE aktywny = 1 ORDER BY okres DESC, handlowiec').all());
 });
 api.post('/cele', (req, res) => {
-  const { okres, handlowiec, przychod_wazony, marza, wygrane, tematy_komitet, notatka } = req.body;
+  const { okres, handlowiec, przychod_wazony, marza, wygrane, tematy_komitet, sprzedaz, notatka } = req.body;
   if (!okres || !zakresOkresu(okres)) return res.status(400).json({ error: 'Okres w formacie 2026Q3 lub 2026' });
   if (!handlowiec) return res.status(400).json({ error: 'Handlowiec jest wymagany' });
-  const r = db.prepare('INSERT INTO cele (okres, handlowiec, przychod_wazony, marza, wygrane, tematy_komitet, notatka) VALUES (?,?,?,?,?,?,?)')
-    .run(okres, handlowiec, przychod_wazony ?? null, marza ?? null, wygrane ?? null, tematy_komitet ?? null, notatka || null);
+  const r = db.prepare('INSERT INTO cele (okres, handlowiec, przychod_wazony, marza, wygrane, tematy_komitet, sprzedaz, notatka) VALUES (?,?,?,?,?,?,?,?)')
+    .run(okres, handlowiec, przychod_wazony ?? null, marza ?? null, wygrane ?? null, tematy_komitet ?? null, sprzedaz ?? null, notatka || null);
   res.json({ id: Number(r.lastInsertRowid) });
 });
 api.put('/cele/:id', (req, res) => {
-  updateById('cele', req.params.id, pick(req.body, ['okres', 'handlowiec', 'przychod_wazony', 'marza', 'wygrane', 'tematy_komitet', 'notatka', 'aktywny']));
+  updateById('cele', req.params.id, pick(req.body, ['okres', 'handlowiec', 'przychod_wazony', 'marza', 'wygrane', 'tematy_komitet', 'sprzedaz', 'notatka', 'aktywny']));
   res.json({ ok: true });
 });
 api.delete('/cele/:id', (req, res) => {
@@ -1627,6 +1627,151 @@ api.get('/cele/postep', (req, res) => {
     });
   }
   res.json(wynik);
+});
+
+// ---------- PLAN WYNIKOWY: "na co idziemy" + odwrocony lejek z konwersji ----------
+// Cotygodniowa kontrola: projekcja wyniku przy aktualnych postepach, luka do planu
+// i wyliczenie wstecz (przez zmierzone konwersje), ile potrzeba lead/kwalifikacji/
+// tematow/komitetow/dzialan - lacznie i tygodniowo.
+
+const FALLBACK_KONWERSJI = { lead_interesujacy: .55, interesujacy_temat: .30, temat_komitet: .45, komitet_wygrana: .25 };
+const MIN_PROBA = 8; // ponizej tylu obserwacji uzywamy fallbacku, nie pomiaru
+
+function konwersjaZmierzona(licznik, mianownik, fallback) {
+  // Pomiar wymaga sensownej proby PO OBU stronach ulamka - inaczej baseline
+  // (np. tematy z importu arkusza nie maja lead_id, wiec licznik lead->temat bylby sztucznie niski)
+  if (!mianownik || mianownik < MIN_PROBA || licznik < 5) return { wartosc: fallback, zrodlo: 'baseline' };
+  return { wartosc: Math.max(0.01, licznik / mianownik), zrodlo: 'pomiar' };
+}
+
+function policzPlanWynikowy(okres) {
+  const [od, doD] = zakresOkresu(okres) || [];
+  if (!od) throw new Error('Okres w formacie 2026 lub 2026Q3');
+  const dzis = new Date();
+  const koniec = new Date(doD + 'T00:00:00Z');
+  const tygodniePozostale = Math.max(1, Math.round((koniec - dzis) / (7 * 86400000)));
+  const miesiacePozostale = Math.max(0.5, +((koniec - dzis) / (30.44 * 86400000)).toFixed(1));
+
+  // Plan: firmowy z konfiguracji (fallback: suma celow sprzedazy), per handlowiec z celow
+  const rok = String(okres).slice(0, 4);
+  const planKonf = db.prepare(`SELECT wartosc FROM konfiguracja WHERE klucz = ?`).get('plan_sprzedazy_' + rok);
+  const cele = db.prepare(`SELECT * FROM cele WHERE okres = ? AND aktywny = 1 AND sprzedaz IS NOT NULL`).all(rok);
+  const planFirmowy = planKonf ? Number(planKonf.wartosc) : cele.reduce((s, c) => s + (c.sprzedaz || 0), 0);
+
+  // Wygrane w okresie (wartosc + liczba), takze per handlowiec
+  const wygrane = db.prepare(`
+    SELECT t.handlowiec, COUNT(DISTINCT t.id) n, COALESCE(SUM(t.wartosc_kontraktu), 0) w
+    FROM tematy t JOIN historia_tematu h ON h.temat_id = t.id
+    WHERE t.status = 'wygrany' AND h.wartosc_po = 'wygrany' AND h.data >= ? AND h.data < ?
+    GROUP BY t.handlowiec`).all(od, doD);
+  const wygraneRazem = { n: wygrane.reduce((s, r) => s + r.n, 0), w: +wygrane.reduce((s, r) => s + r.w, 0).toFixed(1) };
+  const srWartoscWygranej = wygraneRazem.n >= 3 ? wygraneRazem.w / wygraneRazem.n : 25; // baseline 25 mln
+
+  // Otwarty pipeline (wazony), takze per handlowiec
+  const otwarte = db.prepare(`SELECT handlowiec, COUNT(*) n,
+      COALESCE(SUM(wartosc_kontraktu * prawdopodobienstwo / 100.0), 0) w
+    FROM tematy WHERE status = 'otwarty' GROUP BY handlowiec`).all();
+  const wazonyRazem = +otwarte.reduce((s, r) => s + r.w, 0).toFixed(1);
+  const tematyOtwarteRazem = otwarte.reduce((s, r) => s + r.n, 0);
+
+  // Projekcja: zakontraktowane + wazony pipeline; luka do planu
+  const projekcja = +(wygraneRazem.w + wazonyRazem).toFixed(1);
+  const luka = Math.max(0, +(planFirmowy - projekcja).toFixed(1));
+
+  // ── Konwersje poziomow procesu (pomiar z danych, fallback: baseline) ──
+  const leadyStat = db.prepare(`SELECT COUNT(*) all_l,
+      SUM(CASE WHEN kwalif_wynik = 'interesujący' THEN 1 ELSE 0 END) inter,
+      SUM(CASE WHEN temat_id IS NOT NULL THEN 1 ELSE 0 END) z_tematem
+    FROM leady`).get();
+  const tematyAll = db.prepare(`SELECT COUNT(*) c FROM tematy`).get().c;
+  const komitetyAll = db.prepare(`SELECT COUNT(DISTINCT pk.temat_id) c FROM potwierdzenia_kamieni pk
+    JOIN kamienie_karty km ON km.id = pk.kamien_id WHERE km.kod IN ('M5','P5','K8','F3')`).get().c;
+  const wygraneAll = db.prepare(`SELECT COUNT(*) c FROM tematy WHERE status = 'wygrany'`).get().c;
+
+  const konw = {
+    lead_interesujacy: konwersjaZmierzona(leadyStat.inter, leadyStat.all_l, FALLBACK_KONWERSJI.lead_interesujacy),
+    interesujacy_temat: konwersjaZmierzona(leadyStat.z_tematem, leadyStat.inter, FALLBACK_KONWERSJI.interesujacy_temat),
+    temat_komitet: konwersjaZmierzona(komitetyAll, tematyAll, FALLBACK_KONWERSJI.temat_komitet),
+    komitet_wygrana: konwersjaZmierzona(wygraneAll, komitetyAll, FALLBACK_KONWERSJI.komitet_wygrana),
+  };
+
+  // ── Odwrocony lejek: od luki wstecz do leadow ──
+  const potrzebneWygrane = Math.ceil(luka / srWartoscWygranej);
+  const potrzebneKomitety = Math.ceil(potrzebneWygrane / konw.komitet_wygrana.wartosc);
+  const potrzebneTematy = Math.ceil(potrzebneKomitety / konw.temat_komitet.wartosc);
+  const potrzebneInteresujace = Math.ceil(potrzebneTematy / konw.interesujacy_temat.wartosc);
+  const potrzebneLeady = Math.ceil(potrzebneInteresujace / konw.lead_interesujacy.wartosc);
+
+  // Ile "jest" na poziomach teraz (zasoby w toku)
+  const jest = {
+    leady: db.prepare(`SELECT COUNT(*) c FROM leady WHERE status = 'aktywny'`).get().c,
+    interesujace: db.prepare(`SELECT COUNT(*) c FROM leady WHERE status = 'aktywny' AND kwalif_wynik = 'interesujący'`).get().c,
+    tematy: tematyOtwarteRazem,
+    komitety_w_okresie: db.prepare(`SELECT COUNT(DISTINCT pk.temat_id) c FROM potwierdzenia_kamieni pk
+      JOIN kamienie_karty km ON km.id = pk.kamien_id
+      WHERE km.kod IN ('M5','P5','K8','F3') AND pk.data >= ? AND pk.data < ?`).get(od, doD).c,
+    wygrane_w_okresie: wygraneRazem.n,
+  };
+
+  // ── Dzialania: srednio wykonanych dzialan na wygrany temat (fallback 12) ──
+  const dzialNaWygrana = db.prepare(`SELECT COUNT(*) c FROM dzialania d
+    JOIN tematy t ON t.id = d.temat_id WHERE t.status = 'wygrany' AND d.status = 'wykonane'`).get().c;
+  const srDzialan = wygraneAll >= 3 ? Math.max(3, Math.round(dzialNaWygrana / wygraneAll)) : 12;
+  const potrzebneDzialania = potrzebneWygrane * srDzialan;
+
+  // Velocity: potrzebna vs aktualna (mln/mc)
+  const velocityAktualna = policzMetryki().velocity.mln_na_miesiac;
+  const velocityPotrzebna = +(luka / miesiacePozostale).toFixed(1);
+
+  // ── Per handlowiec (te same konwersje, cel z tabeli cele) ──
+  const mapaWygranych = Object.fromEntries(wygrane.map(r => [r.handlowiec || '—', r]));
+  const mapaOtwartych = Object.fromEntries(otwarte.map(r => [r.handlowiec || '—', r]));
+  const handlowcy = cele.map(c => {
+    const wyg = mapaWygranych[c.handlowiec] || { n: 0, w: 0 };
+    const otw = mapaOtwartych[c.handlowiec] || { n: 0, w: 0 };
+    const projekcjaH = +(wyg.w + otw.w).toFixed(1);
+    const lukaH = Math.max(0, +((c.sprzedaz || 0) - projekcjaH).toFixed(1));
+    const wygraneH = Math.ceil(lukaH / srWartoscWygranej);
+    const leadyH = Math.ceil(wygraneH / (konw.komitet_wygrana.wartosc * konw.temat_komitet.wartosc
+      * konw.interesujacy_temat.wartosc * konw.lead_interesujacy.wartosc));
+    return {
+      handlowiec: c.handlowiec, plan: c.sprzedaz, wygrane_wartosc: +wyg.w.toFixed(1), wygrane_n: wyg.n,
+      wazony: +otw.w.toFixed(1), tematy_otwarte: otw.n, projekcja: projekcjaH, luka: lukaH,
+      potrzebne_wygrane: wygraneH,
+      potrzebne_leady_tydz: +(leadyH / tygodniePozostale).toFixed(1),
+      potrzebne_dzialania_tydz: +(wygraneH * srDzialan / tygodniePozostale).toFixed(1),
+    };
+  });
+
+  return {
+    okres, od, do: doD, tygodnie_pozostale: tygodniePozostale, miesiace_pozostale: miesiacePozostale,
+    plan_firmowy: planFirmowy, wygrane: wygraneRazem, wazony: wazonyRazem,
+    projekcja, luka, sr_wartosc_wygranej: +srWartoscWygranej.toFixed(1),
+    velocity: { aktualna: velocityAktualna, potrzebna: velocityPotrzebna },
+    konwersje: konw,
+    lejek_odwrocony: [
+      { poziom: 'Nowe leady', potrzeba: potrzebneLeady, tygodniowo: +(potrzebneLeady / tygodniePozostale).toFixed(1), jest: jest.leady, konwersja: konw.lead_interesujacy },
+      { poziom: 'Kwalifikacje (interesujące)', potrzeba: potrzebneInteresujace, tygodniowo: +(potrzebneInteresujace / tygodniePozostale).toFixed(1), jest: jest.interesujace, konwersja: konw.interesujacy_temat },
+      { poziom: 'Tematy w pipeline', potrzeba: potrzebneTematy, tygodniowo: +(potrzebneTematy / tygodniePozostale).toFixed(1), jest: jest.tematy, konwersja: konw.temat_komitet },
+      { poziom: 'Komitety (BID)', potrzeba: potrzebneKomitety, tygodniowo: +(potrzebneKomitety / tygodniePozostale).toFixed(1), jest: jest.komitety_w_okresie, konwersja: konw.komitet_wygrana },
+      { poziom: 'Wygrane', potrzeba: potrzebneWygrane, tygodniowo: +(potrzebneWygrane / tygodniePozostale).toFixed(1), jest: jest.wygrane_w_okresie, konwersja: null },
+    ],
+    dzialania: { srednio_na_wygrana: srDzialan, potrzeba: potrzebneDzialania, tygodniowo: +(potrzebneDzialania / tygodniePozostale).toFixed(1) },
+    handlowcy,
+  };
+}
+
+api.get('/plan-wynikowy', (req, res) => {
+  const okres = req.query.okres || String(new Date().getFullYear());
+  res.json(policzPlanWynikowy(okres));
+});
+
+api.put('/plan-wynikowy', (req, res) => {
+  const { rok, plan } = req.body;
+  if (!rok || !plan) return res.status(400).json({ error: 'Podaj rok i plan (mln PLN)' });
+  db.prepare(`INSERT OR REPLACE INTO konfiguracja (klucz, wartosc) VALUES (?, ?)`)
+    .run('plan_sprzedazy_' + rok, String(plan));
+  res.json({ ok: true });
 });
 
 // ---------- METRYKI PIPELINE (dashboard v2) ----------

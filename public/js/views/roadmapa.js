@@ -91,6 +91,7 @@ function formularzCelu(c, odswiez) {
   const form = el('div', { class: 'form-siatka' },
     pole({ name: 'okres', label: 'Okres (2026Q3 lub 2026)', wymagane: true, wartosc: c?.okres || domyslnyOkres }),
     pole({ name: 'handlowiec', label: 'Handlowiec', wymagane: true, wartosc: c?.handlowiec || 'K. Latoś' }),
+    pole({ name: 'sprzedaz', label: 'Plan SPRZEDAŻY (mln) — podpisane umowy', typ: 'number', step: '0.1', wartosc: c?.sprzedaz, pomoc: 'Zasila kontrolę „na co idziemy" w PDCA' }),
     pole({ name: 'przychod_wazony', label: 'Cel: przychód ważony (mln)', typ: 'number', step: '0.1', wartosc: c?.przychod_wazony }),
     pole({ name: 'marza', label: 'Cel: marża (mln)', typ: 'number', step: '0.1', wartosc: c?.marza }),
     pole({ name: 'wygrane', label: 'Cel: liczba wygranych', typ: 'number', wartosc: c?.wygrane }),
