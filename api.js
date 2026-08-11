@@ -803,8 +803,8 @@ api.get('/tematy', (req, res) => {
     SELECT t.*, k.nazwa AS klient_nazwa, km.nazwa AS kamien_nazwa, km.kod AS kamien_kod, km.kolejnosc AS kamien_kolejnosc,
       km.prawd_min, km.prawd_max, km.prog_zastygniecia_dni, kr.nazwa AS karta_nazwa, kr.kod AS pipeline_kod,
       (SELECT COUNT(*) FROM dzialania d WHERE d.temat_id = t.id AND d.status = 'planowane') AS dzialania_otwarte,
-      EXISTS (SELECT 1 FROM potwierdzenia_kamieni pk JOIN kamienie_karty pkk ON pkk.id = pk.kamien_id
-        WHERE pk.temat_id = t.id AND pkk.kod IN ('M5','P5','K8','F3')) AS po_bid
+      (t.w_ofertowaniu = 1 OR EXISTS (SELECT 1 FROM potwierdzenia_kamieni pk JOIN kamienie_karty pkk ON pkk.id = pk.kamien_id
+        WHERE pk.temat_id = t.id AND pkk.kod IN ('M5','P5','K8','F3'))) AS po_bid
     FROM tematy t
     LEFT JOIN klienci k ON k.id = t.klient_id
     LEFT JOIN kamienie_karty km ON km.id = t.kamien_id
@@ -831,8 +831,8 @@ api.get('/pipeline-ofertowanie', (req, res) => {
     LEFT JOIN kamienie_karty km ON km.id = t.kamien_id
     LEFT JOIN karty_ratingu kr ON kr.id = t.karta_id
     WHERE t.status = 'otwarty'
-      AND EXISTS (SELECT 1 FROM potwierdzenia_kamieni pk JOIN kamienie_karty pkk ON pkk.id = pk.kamien_id
-        WHERE pk.temat_id = t.id AND pkk.kod IN ('M5','P5','K8','F3'))
+      AND (t.w_ofertowaniu = 1 OR EXISTS (SELECT 1 FROM potwierdzenia_kamieni pk JOIN kamienie_karty pkk ON pkk.id = pk.kamien_id
+        WHERE pk.temat_id = t.id AND pkk.kod IN ('M5','P5','K8','F3')))
     ORDER BY t.prawdopodobienstwo DESC, t.wartosc_kontraktu DESC`).all();
   for (const t of tematy) {
     t.dni_w_etapie = dniWEtapie(t);
@@ -1682,8 +1682,9 @@ const MIN_PROBA = 8; // ponizej tylu obserwacji uzywamy fallbacku, nie pomiaru
 function konwersjaZmierzona(licznik, mianownik, fallback) {
   // Pomiar wymaga sensownej proby PO OBU stronach ulamka - inaczej baseline
   // (np. tematy z importu arkusza nie maja lead_id, wiec licznik lead->temat bylby sztucznie niski)
-  if (!mianownik || mianownik < MIN_PROBA || licznik < 5) return { wartosc: fallback, zrodlo: 'baseline' };
-  return { wartosc: Math.max(0.01, licznik / mianownik), zrodlo: 'pomiar' };
+  // baseline w wyniku pozwala widokom kolorowac odchylenia pomiaru od oczekiwania
+  if (!mianownik || mianownik < MIN_PROBA || licznik < 5) return { wartosc: fallback, zrodlo: 'baseline', baseline: fallback };
+  return { wartosc: Math.max(0.01, licznik / mianownik), zrodlo: 'pomiar', baseline: fallback };
 }
 
 function policzPlanWynikowy(okres) {
@@ -1921,12 +1922,13 @@ api.get('/silnik', (req, res) => {
       COALESCE(SUM(wartosc_kontraktu), 0) suma,
       COALESCE(SUM(wartosc_kontraktu * prawdopodobienstwo / 100.0), 0) wazona
     FROM tematy t WHERE t.status = 'otwarty'
-      AND EXISTS (SELECT 1 FROM potwierdzenia_kamieni pk JOIN kamienie_karty pkk ON pkk.id = pk.kamien_id
-        WHERE pk.temat_id = t.id AND pkk.kod IN ('M5','P5','K8','F3'))`).get();
+      AND (t.w_ofertowaniu = 1 OR EXISTS (SELECT 1 FROM potwierdzenia_kamieni pk JOIN kamienie_karty pkk ON pkk.id = pk.kamien_id
+        WHERE pk.temat_id = t.id AND pkk.kod IN ('M5','P5','K8','F3')))`).get();
   const kolejkaKomitetu = db.prepare(`SELECT COUNT(*) c FROM tematy t
     JOIN kamienie_karty km ON km.id = t.kamien_id
     WHERE t.status = 'otwarty' AND km.kod IN ('M5','P5','K8','F3')`).get().c;
   const tematyPrzed = db.prepare(`SELECT COUNT(*) c FROM tematy t WHERE t.status = 'otwarty'
+    AND t.w_ofertowaniu = 0
     AND NOT EXISTS (SELECT 1 FROM potwierdzenia_kamieni pk JOIN kamienie_karty pkk ON pkk.id = pk.kamien_id
       WHERE pk.temat_id = t.id AND pkk.kod IN ('M5','P5','K8','F3'))`).get().c;
 
@@ -2292,8 +2294,8 @@ api.post('/import/pipeline/wykonaj', (req, res) => {
       const r = db.prepare(`INSERT INTO tematy
         (identyfikator, nazwa, klient_id, osoba_id, handlowiec, zrodlo, model_realizacji, co_budujemy,
          data_startu, wartosc_kontraktu, marza_pct, termin_oferty, termin_realizacji, czas_trwania_mies,
-         karta_id, kamien_id, prawdopodobienstwo, korekta_reczna, status, czy_bierzemy)
-        VALUES (?,?,?,?,?,?,?,?,date('now'),?,?,?,?,?,?,?,?,?, 'otwarty','ofertujemy')`)
+         karta_id, kamien_id, prawdopodobienstwo, korekta_reczna, status, czy_bierzemy, w_ofertowaniu)
+        VALUES (?,?,?,?,?,?,?,?,date('now'),?,?,?,?,?,?,?,?,?, 'otwarty','ofertujemy',1)`)
         .run(identyfikator, p.inwestor, klientId, osobaId, handlowiec || 'K. Latoś', 'Pipeline (import)',
           p.model_realizacji || 'Generalne wykonawstwo', p.rodzaj || null, p.wartosc || 0, p.marza_pct ?? 9,
           p.termin_oferty || null, p.termin_realizacji || null, p.czas_trwania_mies || 12,

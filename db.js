@@ -582,6 +582,15 @@ function seedSlownikJesliBrak(typ, wartosci) {
   )`);
   dodajKolumne('leady', 'kampania_id', 'INTEGER'); // przypisanie leada do kampanii (przy imporcie lub recznie)
 
+  // Warstwa "Pipeline": tematy z realnego arkusza ofertowego sa juz w ofertowaniu,
+  // choc nie maja w CRM formalnego potwierdzenia kamienia Komitetu (import nie
+  // falszuje faktow kamieni). Flaga wlacza je do warstwy 1 obok tematow po BID.
+  dodajKolumne('tematy', 'w_ofertowaniu', 'INTEGER DEFAULT 0');
+  if (!db.prepare(`SELECT 1 FROM konfiguracja WHERE klucz = 'flaga_ofertowanie_import'`).get()) {
+    db.prepare(`UPDATE tematy SET w_ofertowaniu = 1 WHERE zrodlo = 'Pipeline (import)'`).run();
+    db.prepare(`INSERT INTO konfiguracja (klucz, wartosc) VALUES ('flaga_ofertowanie_import', '1')`).run();
+  }
+
   // Nowe slowniki (tylko jesli brak - nie klobruja edycji uzytkownika)
   seedSlownikJesliBrak('sposob_pozyskania',
     ['Marketing', 'Prospecting NB', 'Klient powracający (AM)', 'Partner', 'Zarząd', 'Polecenie']);

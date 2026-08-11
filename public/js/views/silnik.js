@@ -15,6 +15,16 @@ function kolorKondycji(k) {
 
 const IKONA_TRYBIKA = { leady: 'leady', kwalifikacja: 'scoring', lejek_nb: 'lejki', komitet: 'komitet', ofertowanie: 'pipeline' };
 
+// Konwersja zmierzona odbiegajaca od oczekiwania (baseline) = sygnal do poprawy procesu:
+// >= baseline zielona, 60-100% baseline zolta, < 60% czerwona; baseline bez pomiaru = szara
+export function kolorKonwersji(k) {
+  if (!k || k.zrodlo !== 'pomiar' || !k.baseline) return 'szary';
+  const r = k.wartosc / k.baseline;
+  if (r >= 1) return 'zielony';
+  if (r >= 0.6) return 'zolty';
+  return 'czerwony';
+}
+
 export async function widokSilnik(kontener) {
   const d = await GET('/silnik');
 
@@ -45,8 +55,8 @@ export async function widokSilnik(kontener) {
       el('div', { style: 'font-size:12px; color:var(--tekst-2)' },
         `${t.stan.liczba} ${t.stan.etykieta}`,
         t.stan.wazona != null ? ` · ważona ${mln(t.stan.wazona)}` : ''),
-      t.konwersja ? el('div', {},
-        badge(`↓ ${Math.round(t.konwersja.wartosc * 100)}%`, t.konwersja.zrodlo === 'pomiar' ? 'nieb' : 'szary'),
+      t.konwersja ? el('div', { title: `oczekiwana (baseline): ${Math.round(t.konwersja.baseline * 100)}%` },
+        badge(`↓ ${Math.round(t.konwersja.wartosc * 100)}%`, kolorKonwersji(t.konwersja)),
         el('span', { style: 'font-size:11px; color:var(--tekst-2); margin-left:4px' }, t.konwersja.zrodlo)) : '',
       gardlo ? el('div', { style: 'color:var(--czerwony); font-weight:700; font-size:12px; display:flex; gap:4px; align-items:center' },
         ikona('alert', 14), 'wąskie gardło') : '');
@@ -99,6 +109,7 @@ export async function widokSilnik(kontener) {
       strzalka(), kartaWyniku),
     el('div', { class: 'info-box', style: 'margin-top:14px' },
       'Każdy trybik: pierścień = realizacja tygodniowego tempa z planu wynikowego (zrobione / wymagane), ',
-      'niebieska odznaka ↓ = konwersja na wyjściu trybika (pomiar z danych lub baseline przy małej próbie). ',
+      'odznaka ↓ = konwersja na wyjściu trybika. Kolor konwersji = odchylenie pomiaru od oczekiwania (baseline w dymku): ',
+      'zielona ≥ baseline, żółta 60–100%, czerwona < 60%; szara = baseline bez pomiaru (za mała próba). ',
       'Najsłabszy trybik podświetlony na czerwono obniża prognozę — szczegóły liczb w kartach PDCA i Prognoza.'));
 }

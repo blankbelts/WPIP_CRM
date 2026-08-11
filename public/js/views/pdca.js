@@ -8,6 +8,7 @@
 import { GET, POST } from '../api.js';
 import { el, tabela, badge, mln, dataPl, modal, pole, zbierzForm, toast } from '../ui.js';
 import { ikona } from '../ikony.js';
+import { kolorKonwersji } from './silnik.js';
 
 const STAN_BADGE = { 'w normie': 'zielony', zagrozony: 'zolty', opozniony: 'czerwony', 'brak normy': 'szary' };
 const STAN_OPIS = { 'w normie': 'w normie', zagrozony: 'zagrożony', opozniony: 'opóźniony', 'brak normy': 'brak normy' };
@@ -51,8 +52,8 @@ export async function widokPdca(kontener) {
 // ── Kontrola tygodniowa: na jaki wynik idziemy + odwrocony lejek z konwersji ──
 function sekcjaNaCoIdziemy(pw, odswiez) {
   const naPlanie = pw.projekcja >= pw.plan_firmowy;
-  const zrodloBadge = (k) => badge(k.zrodlo === 'pomiar' ? `${Math.round(k.wartosc * 100)}%` : `~${Math.round(k.wartosc * 100)}%`,
-    k.zrodlo === 'pomiar' ? 'nieb' : 'szary');
+  const zrodloBadge = (k) => el('span', { title: k.baseline ? `oczekiwana (baseline): ${Math.round(k.baseline * 100)}%` : '' },
+    badge(k.zrodlo === 'pomiar' ? `${Math.round(k.wartosc * 100)}%` : `~${Math.round(k.wartosc * 100)}%`, kolorKonwersji(k)));
 
   return el('div', { class: 'karta-box', style: 'border-left: 4px solid ' + (naPlanie ? 'var(--zielony)' : 'var(--akcent)') },
     el('div', { class: 'naglowek-akcje' },
@@ -94,7 +95,7 @@ function sekcjaNaCoIdziemy(pw, odswiez) {
       },
     ], pw.lejek_odwrocony),
     el('p', { class: 'podtytul', style: 'margin:8px 0 0; font-size:12px' },
-      'Konwersje: niebieskie = zmierzone z danych CRM, szare (~) = baseline do czasu zebrania próby. „Jest teraz" dla leadów/tematów = otwarte w toku; dla komitetów/wygranych = zrealizowane w okresie.'),
+      'Konwersje zmierzone kolorowane wg odchylenia od oczekiwania (baseline w dymku): zielona ≥ baseline, żółta 60–100%, czerwona < 60%; szare (~) = baseline do czasu zebrania próby. „Jest teraz" dla leadów/tematów = otwarte w toku; dla komitetów/wygranych = zrealizowane w okresie.'),
 
     // Per handlowiec
     pw.handlowcy.length ? el('div', {},
