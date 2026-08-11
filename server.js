@@ -36,5 +36,6 @@ const serwer = app.listen(PORT, () => {
 process.on('SIGTERM', () => {
   console.log('SIGTERM - zamykanie serwera');
   serwer.close(() => process.exit(0));
+  serwer.closeIdleConnections?.(); // keep-alive z proxy Railway blokuje close() - domknij od razu
   setTimeout(() => process.exit(0), 3000).unref();
 });

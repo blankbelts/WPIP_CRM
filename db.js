@@ -20,7 +20,14 @@ if (fs.existsSync(SCIEZKA_RESTORE)) {
   console.log('Przywrócono bazę sprzed danych demo.');
 }
 
-console.log('Baza danych:', SCIEZKA_BAZY);
+// Diagnostyka trwalosci wolumenu: swieza baza na produkcji = wolumen niepodpiety
+// pod DATA_DIR albo wyczyszczony - ta linia w logu deployu od razu to zdradza
+const bazaIstniala = fs.existsSync(SCIEZKA_BAZY);
+console.log('Baza danych:', SCIEZKA_BAZY, bazaIstniala ? '(istniejąca)' : '(NOWA — tworzę od zera!)');
+if (!bazaIstniala && process.env.DATA_DIR) {
+  console.warn('UWAGA: DATA_DIR jest ustawione, a pliku bazy nie było. Jeśli to nie pierwszy start, '
+    + 'sprawdź czy wolumen jest podpięty i czy jego Mount Path = ' + process.env.DATA_DIR);
+}
 // timeout: przy deployu na Railway stary kontener moze jeszcze trzymac locka na bazie
 // z wolumenu - czekamy do 15 s zamiast padac z SQLITE_BUSY (PRAGMA busy_timeout
 // nie dziala w node:sqlite, timeout trzeba podac w konstruktorze)
