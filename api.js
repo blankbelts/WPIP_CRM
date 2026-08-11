@@ -1848,6 +1848,100 @@ api.get('/plan-wynikowy', (req, res) => {
   res.json(policzPlanWynikowy(okres));
 });
 
+// ---------- SILNIK SPRZEDAZY: graficzny model trybikow ----------
+// Obie warstwy jako jeden mechanizm: zrodla -> prospecting -> kwalifikacja ->
+// lejek NB -> Komitet (BID) -> ofertowanie -> wynik. Kazdy trybik ma stan,
+// tygodniowe wymagane vs zrobione (z planu wynikowego) i konwersje na wyjsciu.
+// Najslabszy trybik tygodnia = waskie gardlo obnizajace prognoze.
+api.get('/silnik', (req, res) => {
+  const okres = req.query.okres || String(new Date().getFullYear());
+  const plan = policzPlanWynikowy(okres);
+  const poz = Object.fromEntries(plan.tydzien.pozycje.map(p => [p.poziom, p]));
+  const lejek = Object.fromEntries(plan.lejek_odwrocony.map(p => [p.poziom, p]));
+
+  // Zrodla pozyskania: naplyw leadow 30 dni + aktywne w toku
+  const zrodla = db.prepare(`SELECT COALESCE(NULLIF(TRIM(zrodlo), ''), 'nieznane') zrodlo,
+      COUNT(*) razem,
+      SUM(CASE WHEN status = 'aktywny' THEN 1 ELSE 0 END) aktywne,
+      SUM(CASE WHEN utworzono >= date('now', '-30 days') THEN 1 ELSE 0 END) ostatnie_30d
+    FROM leady GROUP BY 1 ORDER BY razem DESC`).all();
+
+  // Ofertowanie (warstwa Pipeline): otwarte tematy PO bramce komitetu
+  const ofertowanie = db.prepare(`SELECT COUNT(*) n,
+      COALESCE(SUM(wartosc_kontraktu), 0) suma,
+      COALESCE(SUM(wartosc_kontraktu * prawdopodobienstwo / 100.0), 0) wazona
+    FROM tematy t WHERE t.status = 'otwarty'
+      AND EXISTS (SELECT 1 FROM potwierdzenia_kamieni pk JOIN kamienie_karty pkk ON pkk.id = pk.kamien_id
+        WHERE pk.temat_id = t.id AND pkk.kod IN ('M5','P5','K8','F3'))`).get();
+  const kolejkaKomitetu = db.prepare(`SELECT COUNT(*) c FROM tematy t
+    JOIN kamienie_karty km ON km.id = t.kamien_id
+    WHERE t.status = 'otwarty' AND km.kod IN ('M5','P5','K8','F3')`).get().c;
+  const tematyPrzed = db.prepare(`SELECT COUNT(*) c FROM tematy t WHERE t.status = 'otwarty'
+    AND NOT EXISTS (SELECT 1 FROM potwierdzenia_kamieni pk JOIN kamienie_karty pkk ON pkk.id = pk.kamien_id
+      WHERE pk.temat_id = t.id AND pkk.kod IN ('M5','P5','K8','F3'))`).get().c;
+
+  // Wartosc jednostki na kazdym poziomie: sr. wygrana x konwersje w dol lejka
+  const k = plan.konwersje;
+  const w = plan.sr_wartosc_wygranej;
+  const wartoscJednostki = {
+    lead: +(w * k.komitet_wygrana.wartosc * k.temat_komitet.wartosc * k.interesujacy_temat.wartosc * k.lead_interesujacy.wartosc).toFixed(2),
+    kwalifikacja: +(w * k.komitet_wygrana.wartosc * k.temat_komitet.wartosc * k.interesujacy_temat.wartosc).toFixed(2),
+    komitet: +(w * k.komitet_wygrana.wartosc).toFixed(2),
+    wygrana: w,
+  };
+
+  const trybik = (klucz, nazwa, warstwa, stan, tydz, konwersja, wartoscJedn) => {
+    const wymagane = tydz ? tydz.wymagane : null;
+    const zrobione = tydz ? tydz.zrobione : null;
+    const kondycja = wymagane > 0 ? Math.min(1.5, zrobione / wymagane) : null;
+    return { klucz, nazwa, warstwa, stan, wymagane, zrobione,
+      zaplanowane: tydz?.zaplanowane ?? null,
+      kondycja: kondycja == null ? null : +kondycja.toFixed(2),
+      konwersja, wartosc_jednostki: wartoscJedn ?? null };
+  };
+
+  const trybiki = [
+    trybik('leady', 'Prospecting / nowe leady', 'nb',
+      { etykieta: 'aktywne leady', liczba: lejek['Nowe leady'].jest },
+      poz['Nowe leady'], k.lead_interesujacy, wartoscJednostki.lead),
+    trybik('kwalifikacja', 'Kwalifikacja i scoring', 'nb',
+      { etykieta: 'interesujące', liczba: lejek['Kwalifikacje (interesujące)'].jest },
+      poz['Kwalifikacje'], k.interesujacy_temat, wartoscJednostki.kwalifikacja),
+    trybik('lejek_nb', 'Lejek NB — tematy przed Komitetem', 'nb',
+      { etykieta: 'tematy w pracy', liczba: tematyPrzed },
+      poz['Działania'], k.temat_komitet, null),
+    trybik('komitet', 'Komitet Ofertowy (BID)', 'nb',
+      { etykieta: 'w kolejce', liczba: kolejkaKomitetu },
+      poz['Komitety (BID)'], k.komitet_wygrana, wartoscJednostki.komitet),
+    trybik('ofertowanie', 'Ofertowanie — Pipeline', 'pipeline',
+      { etykieta: 'tematy po BID', liczba: ofertowanie.n, wazona: +ofertowanie.wazona.toFixed(1) },
+      poz['Wygrane'], null, wartoscJednostki.wygrana),
+  ];
+
+  // Waskie gardlo: najnizsza kondycja sposrod trybikow z wymaganym tempem;
+  // wplyw = brakujace jednostki w tym tygodniu x wartosc jednostki
+  let waskieGardlo = null;
+  for (const t of trybiki) {
+    if (t.kondycja == null) continue;
+    if (!waskieGardlo || t.kondycja < waskieGardlo.kondycja) waskieGardlo = t;
+  }
+  if (waskieGardlo && waskieGardlo.kondycja < 1) {
+    const brak = Math.max(0, waskieGardlo.wymagane - waskieGardlo.zrobione);
+    waskieGardlo = { klucz: waskieGardlo.klucz, nazwa: waskieGardlo.nazwa, kondycja: waskieGardlo.kondycja,
+      brak_tydzien: +brak.toFixed(1),
+      wplyw_mln: waskieGardlo.wartosc_jednostki ? +(brak * waskieGardlo.wartosc_jednostki).toFixed(1) : null };
+  } else waskieGardlo = null;
+
+  res.json({
+    okres, tydzien_od: plan.tydzien.od,
+    plan: plan.plan_firmowy, projekcja: plan.projekcja, luka: plan.luka,
+    wygrane: plan.wygrane, wazony: plan.wazony,
+    velocity: plan.velocity, sr_wartosc_wygranej: plan.sr_wartosc_wygranej,
+    zrodla, trybiki, waskie_gardlo: waskieGardlo,
+    ofertowanie: { n: ofertowanie.n, suma: +ofertowanie.suma.toFixed(1), wazona: +ofertowanie.wazona.toFixed(1) },
+  });
+});
+
 api.put('/plan-wynikowy', (req, res) => {
   const { rok, plan } = req.body;
   if (!rok || !plan) return res.status(400).json({ error: 'Podaj rok i plan (mln PLN)' });

@@ -10,6 +10,7 @@ import { widokScoring } from './views/scoring.js';
 import { widokKomitet } from './views/komitet.js';
 import { widokPipeline, widokTemat } from './views/pipeline.js';
 import { widokPipelineOfertowanie } from './views/pipelineOfertowanie.js';
+import { widokSilnik } from './views/silnik.js';
 import { widokKlienci, widokKlient } from './views/klienci.js';
 import { widokPartnerzy } from './views/partnerzy.js';
 import { widokRaporty } from './views/raporty.js';
@@ -37,7 +38,7 @@ for (const a of document.querySelectorAll('[data-nav]')) {
 const trasy = [
   [/^\/$/, widokRoadmapa],
   [/^\/pulpit$/, widokRoadmapa], // Pulpit KPI scalony z Roadmapa - stare linki dzialaja
-  [/^\/silnik$/, (k) => { k.innerHTML = '<div class="puste">Widok „Silnik sprzedaży" — w budowie (faza 2).</div>'; }],
+  [/^\/silnik$/, widokSilnik],
   [/^\/kampanie$/, (k) => { k.innerHTML = '<div class="puste">Kampanie — w budowie (faza 3).</div>'; }],
   [/^\/pdca$/, widokPdca],
   // Stary adres metryk prowadzi do karty PDCA — metryki są teraz jej częścią
