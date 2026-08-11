@@ -11,6 +11,7 @@ import { widokKomitet } from './views/komitet.js';
 import { widokPipeline, widokTemat } from './views/pipeline.js';
 import { widokPipelineOfertowanie } from './views/pipelineOfertowanie.js';
 import { widokSilnik } from './views/silnik.js';
+import { widokKampanie } from './views/kampanie.js';
 import { widokKlienci, widokKlient } from './views/klienci.js';
 import { widokPartnerzy } from './views/partnerzy.js';
 import { widokRaporty } from './views/raporty.js';
@@ -39,7 +40,7 @@ const trasy = [
   [/^\/$/, widokRoadmapa],
   [/^\/pulpit$/, widokRoadmapa], // Pulpit KPI scalony z Roadmapa - stare linki dzialaja
   [/^\/silnik$/, widokSilnik],
-  [/^\/kampanie$/, (k) => { k.innerHTML = '<div class="puste">Kampanie — w budowie (faza 3).</div>'; }],
+  [/^\/kampanie$/, widokKampanie],
   [/^\/pdca$/, widokPdca],
   // Stary adres metryk prowadzi do karty PDCA — metryki są teraz jej częścią
   [/^\/metryki$/, widokPdca],

@@ -562,6 +562,26 @@ function seedSlownikJesliBrak(typ, wartosci) {
   const updNorma = db.prepare(`UPDATE slowniki SET norma_dni = ? WHERE typ='kamien_prospectingu' AND wartosc = ? AND norma_dni IS NULL`);
   for (const [etap, dni] of Object.entries(NORMY_PROSPECTING)) updNorma.run(dni, etap);
 
+  // Kampanie: testowanie hipotez segmentowych (buyer person) przez konkretne
+  // akcje marketingowo-sprzedazowe. Kazda ma hipoteze, segment, zrodlo, okres,
+  // cele ilosciowe i werdykt (potwierdzona/obalona) z lejka przypisanych leadow.
+  db.exec(`CREATE TABLE IF NOT EXISTS kampanie (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nazwa TEXT NOT NULL,
+    hipoteza TEXT,
+    segment TEXT,
+    zrodlo TEXT,
+    data_od TEXT,
+    data_do TEXT,
+    cel_leadow INTEGER,
+    cel_tematow INTEGER,
+    status TEXT DEFAULT 'trwa',
+    werdykt_uzasadnienie TEXT,
+    notatki TEXT,
+    utworzono TEXT DEFAULT (datetime('now'))
+  )`);
+  dodajKolumne('leady', 'kampania_id', 'INTEGER'); // przypisanie leada do kampanii (przy imporcie lub recznie)
+
   // Nowe slowniki (tylko jesli brak - nie klobruja edycji uzytkownika)
   seedSlownikJesliBrak('sposob_pozyskania',
     ['Marketing', 'Prospecting NB', 'Klient powracający (AM)', 'Partner', 'Zarząd', 'Polecenie']);

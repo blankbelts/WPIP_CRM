@@ -378,13 +378,15 @@ function zmienStatus(lead, status, sl, odswiez) {
   }
 }
 
-function edytujKontekst(lead, sl, odswiez) {
+async function edytujKontekst(lead, sl, odswiez) {
+  const kampanie = await GET('/kampanie');
   const form = el('div', { class: 'form-siatka' },
     pole({ name: 'nazwa', label: 'Nazwa leada', wartosc: lead.nazwa, szerokie: true }),
     pole({ name: 'identyfikator', label: 'ID tematu (Inwestor_TypObiektu)', wartosc: lead.identyfikator, pomoc: 'Wspólne ID — od leada po ZOS i wynik' }),
     pole({ name: 'handlowiec', label: 'Handlowiec / opiekun', wartosc: lead.handlowiec }),
     pole({ name: 'sposob_pozyskania', label: 'Sposób pozyskania', typ: 'select', opcje: (sl.sposob_pozyskania || []).map(s => s.wartosc), wartosc: lead.sposob_pozyskania }),
     pole({ name: 'zrodlo_wiedzy_wpip', label: 'Źródło wiedzy o WPIP', typ: 'select', opcje: (sl.zrodlo_wiedzy_wpip || []).map(s => s.wartosc), wartosc: lead.zrodlo_wiedzy_wpip, pomoc: 'Zbierane dla wszystkich (potrzeba analityczna Marketingu)' }),
+    pole({ name: 'kampania_id', label: 'Kampania', typ: 'select', opcje: kampanie.map(km => [km.id, km.nazwa]), wartosc: lead.kampania_id, pusta: '— bez kampanii —', pomoc: 'Lejek kampanii liczy się z przypisanych leadów' }),
     pole({ name: 'prawd_kwalifikacji', label: '% szansy na kwalifikację', typ: 'number', min: 0, max: 100, wartosc: lead.prawd_kwalifikacji }),
     pole({ name: 'dobry_powod_kontaktu', label: 'Dobry powód kontaktu (PWE)', typ: 'textarea', wartosc: lead.dobry_powod_kontaktu, szerokie: true }),
     pole({ name: 'notatki', label: 'Notatki', typ: 'textarea', wartosc: lead.notatki, szerokie: true }));

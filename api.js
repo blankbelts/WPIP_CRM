@@ -254,7 +254,7 @@ api.put('/osoby/:id', (req, res) => {
 // ---------- LEADY (prospecting - sciezka pozyskania tematu) ----------
 const LEAD_POLA = ['nazwa', 'klient_id', 'inwestycja_id', 'osoba_id', 'handlowiec', 'zrodlo',
   'prawd_kwalifikacji', 'pwe', 'dobry_powod_kontaktu', 'notatki',
-  'sposob_pozyskania', 'zrodlo_wiedzy_wpip', 'proces_researchu', 'identyfikator'];
+  'sposob_pozyskania', 'zrodlo_wiedzy_wpip', 'proces_researchu', 'identyfikator', 'kampania_id'];
 
 api.get('/leady', (req, res) => {
   const { grupa } = req.query;
@@ -1846,6 +1846,56 @@ function policzPlanWynikowy(okres) {
 api.get('/plan-wynikowy', (req, res) => {
   const okres = req.query.okres || String(new Date().getFullYear());
   res.json(policzPlanWynikowy(okres));
+});
+
+// ---------- KAMPANIE: testowanie hipotez segmentowych ----------
+// Pelny obiekt: hipoteza + segment + zrodlo + okres + cele; lejek konwersji
+// liczony z przypisanych leadow (lead -> interesujacy -> temat -> komitet -> wygrana).
+const KAMPANIA_POLA = ['nazwa', 'hipoteza', 'segment', 'zrodlo', 'data_od', 'data_do',
+  'cel_leadow', 'cel_tematow', 'status', 'werdykt_uzasadnienie', 'notatki'];
+
+function lejekKampanii(kampaniaId) {
+  return db.prepare(`SELECT COUNT(*) leady,
+      SUM(CASE WHEN l.kwalif_wynik = 'interesujący' THEN 1 ELSE 0 END) interesujace,
+      SUM(CASE WHEN l.temat_id IS NOT NULL THEN 1 ELSE 0 END) tematy,
+      SUM(CASE WHEN l.temat_id IS NOT NULL AND EXISTS (
+        SELECT 1 FROM potwierdzenia_kamieni pk JOIN kamienie_karty pkk ON pkk.id = pk.kamien_id
+        WHERE pk.temat_id = l.temat_id AND pkk.kod IN ('M5','P5','K8','F3')) THEN 1 ELSE 0 END) komitety,
+      SUM(CASE WHEN l.temat_id IS NOT NULL AND EXISTS (
+        SELECT 1 FROM tematy t WHERE t.id = l.temat_id AND t.status = 'wygrany') THEN 1 ELSE 0 END) wygrane
+    FROM leady l WHERE l.kampania_id = ?`).get(kampaniaId);
+}
+
+api.get('/kampanie', (req, res) => {
+  const kampanie = db.prepare('SELECT * FROM kampanie ORDER BY data_od DESC, id DESC').all();
+  for (const k of kampanie) k.lejek = lejekKampanii(k.id);
+  res.json(kampanie);
+});
+api.post('/kampanie', (req, res) => {
+  const d = pick(req.body, KAMPANIA_POLA);
+  if (!d.nazwa) return res.status(400).json({ error: 'Nazwa kampanii jest wymagana' });
+  if (!d.hipoteza) return res.status(400).json({ error: 'Kampania testuje hipotezę — wpisz ją' });
+  const keys = Object.keys(d);
+  const r = db.prepare(`INSERT INTO kampanie (${keys.join(',')}) VALUES (${keys.map(() => '?').join(',')})`)
+    .run(...keys.map(k => d[k]));
+  res.json({ id: Number(r.lastInsertRowid) });
+});
+api.put('/kampanie/:id', (req, res) => {
+  updateById('kampanie', req.params.id, pick(req.body, KAMPANIA_POLA));
+  res.json({ ok: true });
+});
+api.delete('/kampanie/:id', (req, res) => {
+  const n = db.prepare('SELECT COUNT(*) c FROM leady WHERE kampania_id = ?').get(req.params.id).c;
+  if (n > 0) return res.status(400).json({ error: `Kampania ma ${n} przypisanych leadów — najpierw je odepnij` });
+  db.prepare('DELETE FROM kampanie WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+// Masowe przypisanie leadow do kampanii (np. swiezo zaimportowana partia)
+api.post('/kampanie/:id/przypisz', (req, res) => {
+  const { lead_ids = [] } = req.body;
+  const upd = db.prepare('UPDATE leady SET kampania_id = ? WHERE id = ?');
+  for (const lid of lead_ids) upd.run(req.params.id, lid);
+  res.json({ ok: true, przypisano: lead_ids.length });
 });
 
 // ---------- SILNIK SPRZEDAZY: graficzny model trybikow ----------
