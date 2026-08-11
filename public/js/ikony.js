@@ -37,6 +37,8 @@ const SCIEZKI = {
   strzalka: '<path d="M5 12h14"/><path d="M12 5l7 7-7 7"/>',
   uspij: '<path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/>',
   info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
+  silnik: '<path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>',
+  kampania: '<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><path d="M4 22v-7"/>',
 };
 
 export function ikona(nazwa, rozmiar = 18) {

@@ -9,6 +9,7 @@ import { widokImportPipeline } from './views/importPipeline.js';
 import { widokScoring } from './views/scoring.js';
 import { widokKomitet } from './views/komitet.js';
 import { widokPipeline, widokTemat } from './views/pipeline.js';
+import { widokPipelineOfertowanie } from './views/pipelineOfertowanie.js';
 import { widokKlienci, widokKlient } from './views/klienci.js';
 import { widokPartnerzy } from './views/partnerzy.js';
 import { widokRaporty } from './views/raporty.js';
@@ -20,8 +21,9 @@ import { ikona } from './ikony.js';
 
 // Ikony nawigacji (mapowanie data-nav -> nazwa ikony)
 const IKONY_NAV = {
-  '/': 'roadmapa', '/import': 'import', '/leady': 'leady',
+  '/': 'roadmapa', '/silnik': 'silnik', '/import': 'import', '/leady': 'leady',
   '/scoring': 'scoring', '/komitet': 'komitet', '/pipeline': 'pipeline',
+  '/przed-komitetem': 'lejki', '/kampanie': 'kampania',
   '/import-pipeline': 'import', '/recykling': 'recykling', '/prognoza': 'prognoza',
   '/pdca': 'pdca', '/raporty': 'raporty', '/klienci': 'klienci',
   '/partnerzy': 'partnerzy', '/dzialania': 'dzialania', '/lejki': 'lejki', '/ustawienia': 'ustawienia',
@@ -35,6 +37,8 @@ for (const a of document.querySelectorAll('[data-nav]')) {
 const trasy = [
   [/^\/$/, widokRoadmapa],
   [/^\/pulpit$/, widokRoadmapa], // Pulpit KPI scalony z Roadmapa - stare linki dzialaja
+  [/^\/silnik$/, (k) => { k.innerHTML = '<div class="puste">Widok „Silnik sprzedaży" — w budowie (faza 2).</div>'; }],
+  [/^\/kampanie$/, (k) => { k.innerHTML = '<div class="puste">Kampanie — w budowie (faza 3).</div>'; }],
   [/^\/pdca$/, widokPdca],
   // Stary adres metryk prowadzi do karty PDCA — metryki są teraz jej częścią
   [/^\/metryki$/, widokPdca],
@@ -46,7 +50,10 @@ const trasy = [
   [/^\/import-pipeline$/, widokImportPipeline],
   [/^\/scoring$/, widokScoring],
   [/^\/komitet$/, widokKomitet],
-  [/^\/pipeline$/, widokPipeline],
+  // Warstwa 1: arkuszowy podglad tematow w ofertowaniu (po pozytywnym Komitecie)
+  [/^\/pipeline$/, widokPipelineOfertowanie],
+  // Warstwa 2 (New Business): kanban tematow pracowanych lejkiem do bramki BID
+  [/^\/przed-komitetem$/, widokPipeline],
   [/^\/prognoza$/, widokPrognoza],
   [/^\/tematy\/(\d+)$/, widokTemat],
   [/^\/klienci$/, widokKlienci],

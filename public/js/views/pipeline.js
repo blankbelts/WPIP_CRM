@@ -6,9 +6,11 @@ import { el, modal, pole, zbierzForm, toast, tabela, badgeStatus, badge, dataPl,
 import { ikona } from '../ikony.js';
 import { formularzDzialania, listaDzialan } from './dzialania.js';
 
+// WARSTWA 2 (New Business): kanban tematow PRZED Komitetem - praca po kamieniach
+// az do bramki BID. Tematy po pozytywnym Komitecie zyja w warstwie "Pipeline".
 export async function widokPipeline(kontener) {
   const [tematy, listaKart] = await Promise.all([GET('/tematy'), karty()]);
-  const wszystkieOtwarte = tematy.filter(t => t.status === 'otwarty');
+  const wszystkieOtwarte = tematy.filter(t => t.status === 'otwarty' && !t.po_bid);
   const inne = tematy.filter(t => t.status !== 'otwarty');
 
   // Filtry (handlowiec / tag) - w stylu widokow Livespace
@@ -128,9 +130,9 @@ export async function widokPipeline(kontener) {
   kontener.append(
     el('div', { class: 'naglowek-akcje' },
       el('div', {},
-        el('h1', {}, 'Pipeline sprzedażowy'),
+        el('h1', {}, 'Tematy przed Komitetem'),
         naglowekInfo),
-      el('div', { class: 'info-box', style: 'margin:0' }, 'Tematy powstają z leadów przez „Uruchom temat" (wejście na M1)')),
+      el('div', { class: 'info-box', style: 'margin:0' }, 'Praca lejkiem NB aż do bramki BID — po pozytywnym Komitecie temat przechodzi do warstwy „Pipeline"')),
     el('div', { class: 'filtry' },
       el('select', { onchange: e => { filtrHandlowiec = e.target.value; rysuj(); } },
         el('option', { value: '' }, 'Handlowiec: wszyscy'),

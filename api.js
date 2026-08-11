@@ -794,12 +794,17 @@ const TEMAT_POLA = ['nazwa', 'klient_id', 'inwestycja_id', 'osoba_id', 'handlowi
   'model_realizacji', 'co_budujemy', 'data_startu', 'wartosc_kontraktu', 'marza_pct', 'termin_oferty',
   'termin_realizacji', 'czas_trwania_mies', 'czy_bierzemy', 'powod_odpuszczenia', 'notatki', 'tagi'];
 
+// Kody kamieni komitetowych (bramka BID) - wspolne dla warstw Pipeline / New Business
+const KODY_KOMITETU = ['M5', 'P5', 'K8', 'F3'];
+
 api.get('/tematy', (req, res) => {
   sprawdzRecykling();
   const tematy = db.prepare(`
     SELECT t.*, k.nazwa AS klient_nazwa, km.nazwa AS kamien_nazwa, km.kod AS kamien_kod, km.kolejnosc AS kamien_kolejnosc,
       km.prawd_min, km.prawd_max, km.prog_zastygniecia_dni, kr.nazwa AS karta_nazwa, kr.kod AS pipeline_kod,
-      (SELECT COUNT(*) FROM dzialania d WHERE d.temat_id = t.id AND d.status = 'planowane') AS dzialania_otwarte
+      (SELECT COUNT(*) FROM dzialania d WHERE d.temat_id = t.id AND d.status = 'planowane') AS dzialania_otwarte,
+      EXISTS (SELECT 1 FROM potwierdzenia_kamieni pk JOIN kamienie_karty pkk ON pkk.id = pk.kamien_id
+        WHERE pk.temat_id = t.id AND pkk.kod IN ('M5','P5','K8','F3')) AS po_bid
     FROM tematy t
     LEFT JOIN klienci k ON k.id = t.klient_id
     LEFT JOIN kamienie_karty km ON km.id = t.kamien_id
@@ -807,6 +812,37 @@ api.get('/tematy', (req, res) => {
     ORDER BY km.kolejnosc DESC, t.wartosc_kontraktu DESC`).all();
   for (const t of tematy) { t.dni_w_etapie = dniWEtapie(t); t.zastygly = czyZastygly(t); }
   res.json(tematy);
+});
+
+// Warstwa 1 "Pipeline": arkuszowy poglad tematow PO pozytywnym Komitecie (w ofertowaniu).
+// Proste kolumny jak w arkuszu KLA; % wygranej sterowany kamieniami + efektami dzialan.
+api.get('/pipeline-ofertowanie', (req, res) => {
+  sprawdzRecykling();
+  const tematy = db.prepare(`
+    SELECT t.*, k.nazwa AS klient_nazwa, km.nazwa AS kamien_nazwa, km.kod AS kamien_kod,
+      km.kolejnosc AS kamien_kolejnosc, kr.kod AS pipeline_kod,
+      (SELECT COUNT(*) FROM kamienie_karty kk WHERE kk.karta_id = t.karta_id) AS kamieni_lacznie,
+      (SELECT d.cel FROM dzialania d WHERE d.temat_id = t.id AND d.status = 'planowane'
+        ORDER BY d.termin IS NULL, d.termin LIMIT 1) AS najblizsze_dzialanie,
+      (SELECT d.termin FROM dzialania d WHERE d.temat_id = t.id AND d.status = 'planowane'
+        ORDER BY d.termin IS NULL, d.termin LIMIT 1) AS najblizszy_termin
+    FROM tematy t
+    LEFT JOIN klienci k ON k.id = t.klient_id
+    LEFT JOIN kamienie_karty km ON km.id = t.kamien_id
+    LEFT JOIN karty_ratingu kr ON kr.id = t.karta_id
+    WHERE t.status = 'otwarty'
+      AND EXISTS (SELECT 1 FROM potwierdzenia_kamieni pk JOIN kamienie_karty pkk ON pkk.id = pk.kamien_id
+        WHERE pk.temat_id = t.id AND pkk.kod IN ('M5','P5','K8','F3'))
+    ORDER BY t.prawdopodobienstwo DESC, t.wartosc_kontraktu DESC`).all();
+  for (const t of tematy) {
+    t.dni_w_etapie = dniWEtapie(t);
+    t.stan_czasu = stanCzasu(t);
+    t.prognoza = prognozaPodpisania(t);
+    t.marza_mln = t.wartosc_kontraktu && t.marza_pct ? +(t.wartosc_kontraktu * t.marza_pct / 100).toFixed(2) : null;
+  }
+  const suma = tematy.reduce((s, t) => s + (t.wartosc_kontraktu || 0), 0);
+  const wazona = tematy.reduce((s, t) => s + (t.wartosc_kontraktu || 0) * (t.prawdopodobienstwo || 0) / 100, 0);
+  res.json({ tematy, suma: +suma.toFixed(1), wazona: +wazona.toFixed(1) });
 });
 api.get('/tematy/:id', (req, res) => {
   const t = db.prepare(`
